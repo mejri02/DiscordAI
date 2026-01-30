@@ -1,18 +1,18 @@
-# 🤖 Discord AI Selfbot
+# ðŸ¤– Discord AI Selfbot
 
 Advanced Discord selfbot with AI-powered responses, automatic channel monitoring, and intelligent conversation capabilities.
 
-> ⚠️ **WARNING**
+> âš ï¸ **WARNING**
 > This is a **selfbot** and violates Discord's Terms of Service.
 > Use at your own risk. Account bans are possible.
 
 ---
 
-## ✨ Features
+## âœ¨ Features
 
-### 🤖 AI-Powered Responses
+### ðŸ¤– AI-Powered Responses
 - **Multiple AI Providers**
-  - **Grok (xAI) — Recommended**
+  - **Grok (xAI) â€” Recommended**
   - OpenAI GPT (GPT-4 / GPT-3.5)
   - Google Gemini
   - Custom OpenAI-compatible APIs
@@ -21,20 +21,20 @@ Advanced Discord selfbot with AI-powered responses, automatic channel monitoring
 - **Persona System**: Adapts responses based on channel topics (crypto, gaming, tech, etc.)
 - **Multi-language Support**: English & Indonesian
 
-### 🔍 Channel Management
+### ðŸ” Channel Management
 - Auto channel fetch (servers & channels)
 - Manual channel add by ID
 - Organized server/channel listing
 - Custom channel names
 
-### ⚡ Advanced Features
+### âš¡ Advanced Features
 - Auto GM (Good Morning) messages
 - Smart reply styles (mention, reply, auto)
 - Discord slow-mode awareness
 - Message queue anti-spam system
 - Daily per-channel limits
 
-### 🔧 Configuration
+### ðŸ”§ Configuration
 - Interactive setup wizard
 - JSON-based configuration
 - Multi-account support
@@ -42,7 +42,7 @@ Advanced Discord selfbot with AI-powered responses, automatic channel monitoring
 
 ---
 
-## 🚀 Quick Start
+## ðŸš€ Quick Start
 
 ### Prerequisites
 - Node.js **16+**
@@ -61,7 +61,7 @@ node main.js
 
 ---
 
-## 📖 Detailed Setup Guide
+## ðŸ“– Detailed Setup Guide
 
 ### Step 1: Get Discord Token
 1. Open Discord in browser
@@ -75,7 +75,7 @@ node main.js
 
 ### Step 2: Get AI API Key
 
-#### ✅ Grok API (Recommended)
+#### âœ… Grok API (Recommended)
 - Console: https://console.x.ai/
 - Docs: https://docs.x.ai/
 - Endpoint: https://api.x.ai/v1/chat/completions
@@ -98,7 +98,7 @@ node main.js
 
 ---
 
-## ⚙️ Configuration Files
+## âš™ï¸ Configuration Files
 
 ### config.json
 ```json
@@ -154,21 +154,21 @@ node main.js
 
 ---
 
-## 🎮 Usage
+## ðŸŽ® Usage
 
 ```bash
 node main.js
 ```
 
 ### Runtime Commands
-- `status` – Show status
-- `channels` – List channels
-- `stats` – Response stats
-- `exit` – Shutdown bot
+- `status` â€“ Show status
+- `channels` â€“ List channels
+- `stats` â€“ Response stats
+- `exit` â€“ Shutdown bot
 
 ---
 
-## 🧠 Channel Personas
+## ðŸ§  Channel Personas
 
 | Persona | Description |
 |------|------------|
@@ -181,7 +181,7 @@ node main.js
 
 ---
 
-## 🎭 Reply Styles
+## ðŸŽ­ Reply Styles
 - mention
 - discord_reply
 - smart
@@ -189,7 +189,7 @@ node main.js
 
 ---
 
-## 🛡️ Security & Safety
+## ðŸ›¡ï¸ Security & Safety
 
 ### Built-in Protections
 - Human typing delays
@@ -200,11 +200,11 @@ node main.js
 
 ---
 
-## 🐛 Troubleshooting
+## ðŸ› Troubleshooting
 
 ### Common Issues
 **Invalid Token**
-- Token expired → fetch a new one
+- Token expired â†’ fetch a new one
 
 **API Rate Limits**
 - Add more API keys
@@ -216,46 +216,46 @@ node main.js
 
 ---
 
-## 📁 Project Structure
+## ðŸ“ Project Structure
 
 ```
 discord-ai-bot/
-├── main.js
-├── setup.js
-├── websocket_fallback.js
-├── package.json
-├── config.json
-├── accounts.json
-├── api_keys.json
-├── README.md
-└── node_modules/
+â”œâ”€â”€ main.js
+â”œâ”€â”€ setup.js
+â”œâ”€â”€ websocket_fallback.js
+â”œâ”€â”€ package.json
+â”œâ”€â”€ config.json
+â”œâ”€â”€ accounts.json
+â”œâ”€â”€ api_keys.json
+â”œâ”€â”€ README.md
+â””â”€â”€ node_modules/
 ```
 
 ---
 
-## 🤝 Contributing
+## ðŸ¤ Contributing
 Pull requests welcome.
 
 ---
 
-## 📄 License
+## ðŸ“„ License
 Educational use only.
 
 ---
 
-## ⚠️ Disclaimer
+## âš ï¸ Disclaimer
 This software violates Discord's Terms of Service.
 The author is not responsible for bans or misuse.
 
 ---
 
-## 👤 Author
+## ðŸ‘¤ Author
 **mejri02**
 GitHub: https://github.com/mejri02
 
 ---
 
-## 🙏 Acknowledgments
+## ðŸ™ Acknowledgments
 - Discord.js community
 - xAI (Grok)
 - OpenAI
@@ -263,5 +263,4 @@ GitHub: https://github.com/mejri02
 
 ---
 
-**Made with ❤️ by mejri02 — Use responsibly**
-
+**Made with â¤ï¸ by mejri02 â€” Use responsibly**
