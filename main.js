@@ -4,7 +4,6 @@ const axios = require('axios');
 const readline = require('readline');
 const cron = require('node-cron');
 
-// Try to load discord.js-selfbot-v13, fallback to WebSocket
 let DiscordClient;
 try {
     DiscordClient = require('discord.js-selfbot-v13').Client;
@@ -31,8 +30,113 @@ const cooldownTime = 86400;
 let messageQueue = {};
 let channelPersonas = {};
 let userContextMemory = {};
+let userTypingPatterns = {};
 
 let HUMAN_PROMPT = "";
+
+function addTypo(text) {
+    if (!botConfig.addTypos || Math.random() > botConfig.typoChance) return text;
+    
+    const typoTypes = [
+        () => text.replace(/([aeiou])(?=[^aeiou]*$)/i, '$1' + (Math.random() > 0.5 ? 'e' : 'o')),
+        () => text.replace(/(ing|ed|es|s)$/i, (match) => match.slice(0, -1)),
+        () => text.replace(/(the|and|you|for|with)/gi, (match) => {
+            const typos = {
+                'the': 'teh', 'and': 'adn', 'you': 'yu', 
+                'for': 'fro', 'with': 'wit', 'this': 'thsi',
+                'that': 'taht', 'have': 'hav', 'what': 'wat'
+            };
+            return typos[match.toLowerCase()] || match;
+        }),
+        () => text.split('').map((c, i) => i === Math.floor(Math.random() * text.length) ? c.toUpperCase() : c).join(''),
+        () => text.replace(/[.!?]$/, (match) => Math.random() > 0.5 ? match + '!' : match)
+    ];
+    
+    return typoTypes[Math.floor(Math.random() * typoTypes.length)]();
+}
+
+function simulateTyping() {
+    if (!botConfig.varyTypingSpeed) return botConfig.typingDelay;
+    
+    const baseDelay = botConfig.typingDelay;
+    const variation = botConfig.typingVariation || 0.3;
+    const min = baseDelay * (1 - variation);
+    const max = baseDelay * (1 + variation);
+    
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function shouldReact(message) {
+    if (!botConfig.addReactions) return false;
+    if (Math.random() > botConfig.reactionChance) return false;
+    
+    const content = message.content.toLowerCase();
+    const authorId = message.author.id;
+    
+    if (!userTypingPatterns[authorId]) {
+        userTypingPatterns[authorId] = {
+            lastReaction: 0,
+            reactionCount: 0
+        };
+    }
+    
+    const now = Date.now();
+    const userData = userTypingPatterns[authorId];
+    
+    if (now - userData.lastReaction < 30000) return false;
+    if (userData.reactionCount >= botConfig.maxReactionsPerUser) return false;
+    
+    return true;
+}
+
+function getReactionEmoji(message) {
+    const content = message.content.toLowerCase();
+    
+    const reactionMap = [
+        { keywords: ['lol', 'haha', 'funny', 'joke'], emoji: '😂' },
+        { keywords: ['?', 'what', 'how', 'why', 'when'], emoji: '❓' },
+        { keywords: ['good', 'great', 'awesome', 'nice', 'cool'], emoji: '👍' },
+        { keywords: ['bad', 'sad', 'unfortunately', 'sorry'], emoji: '😢' },
+        { keywords: ['wow', 'amazing', 'incredible', 'fantastic'], emoji: '😲' },
+        { keywords: ['fire', 'hot', 'bullish', 'moon'], emoji: '🔥' },
+        { keywords: ['love', 'heart', 'like', 'adore'], emoji: '❤️' },
+        { keywords: ['congrats', 'congratulations', 'celebrate'], emoji: '🎉' },
+        { keywords: ['thinking', 'maybe', 'perhaps', 'consider'], emoji: '🤔' },
+        { keywords: ['ok', 'okay', 'sure', 'alright'], emoji: '👌' }
+    ];
+    
+    for (const reaction of reactionMap) {
+        if (reaction.keywords.some(keyword => content.includes(keyword))) {
+            return reaction.emoji;
+        }
+    }
+    
+    const randomEmojis = ['👍', '😄', '👀', '💯', '✨', '🚀', '🫡', '🤝', '🙏', '🎯'];
+    return randomEmojis[Math.floor(Math.random() * randomEmojis.length)];
+}
+
+async function addReactionToMessage(message, emoji) {
+    try {
+        await message.react(emoji);
+        const authorId = message.author.id;
+        
+        if (!userTypingPatterns[authorId]) {
+            userTypingPatterns[authorId] = {
+                lastReaction: Date.now(),
+                reactionCount: 1
+            };
+        } else {
+            userTypingPatterns[authorId].lastReaction = Date.now();
+            userTypingPatterns[authorId].reactionCount += 1;
+        }
+        
+        logger.info(`👍 Reacted with ${emoji} to ${message.author.username}`);
+    } catch (error) {
+        if (!error.message.includes('Missing Permissions')) {
+            logger.error(`Failed to add reaction: ${error.message}`);
+        }
+    }
+}
 
 function loadBotConfig() {
     try {
@@ -74,7 +178,14 @@ function loadBotConfig() {
             maxSlowMode: userConfig.ai?.maxSlowMode || 300,
             qualityFilter: userConfig.ai?.qualityFilter || true,
             personaEnabled: userConfig.ai?.personaEnabled || true,
-            queueEnabled: userConfig.ai?.queueEnabled || true
+            queueEnabled: userConfig.ai?.queueEnabled || true,
+            addTypos: userConfig.ai?.addTypos || false,
+            typoChance: userConfig.ai?.typoChance || 0.15,
+            varyTypingSpeed: userConfig.ai?.varyTypingSpeed || false,
+            typingVariation: userConfig.ai?.typingVariation || 0.3,
+            addReactions: userConfig.ai?.addReactions || false,
+            reactionChance: userConfig.ai?.reactionChance || 0.3,
+            maxReactionsPerUser: userConfig.ai?.maxReactionsPerUser || 5
         };
 
         HUMAN_PROMPT = `You are a normal human participating casually in a Discord server.
@@ -142,7 +253,14 @@ Lowercase only. ${botConfig.minReplyWords}-${botConfig.maxReplyWords} words max.
             maxSlowMode: 300,
             qualityFilter: true,
             personaEnabled: true,
-            queueEnabled: true
+            queueEnabled: true,
+            addTypos: false,
+            typoChance: 0.15,
+            varyTypingSpeed: false,
+            typingVariation: 0.3,
+            addReactions: false,
+            reactionChance: 0.3,
+            maxReactionsPerUser: 5
         };
         HUMAN_PROMPT = `...Lowercase only. 1-10 words max. No punctuation.`;
     }
@@ -437,6 +555,10 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
                     continue;
                 }
 
+                if (botConfig.addTypos) {
+                    res = addTypo(res);
+                }
+
                 const words = res.split(' ');
                 if (words.length > botConfig.maxReplyWords * 2) {
                     res = words.slice(0, botConfig.maxReplyWords * 2).join(' ');
@@ -505,6 +627,10 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
                     continue;
                 }
 
+                if (botConfig.addTypos) {
+                    res = addTypo(res);
+                }
+
                 const words = res.split(' ');
                 if (words.length > botConfig.maxReplyWords * 2) {
                     res = words.slice(0, botConfig.maxReplyWords * 2).join(' ');
@@ -555,7 +681,7 @@ async function getChannelSlowMode(channel) {
         const fetchedChannel = await channel.fetch();
         let slowModeSeconds = fetchedChannel.rateLimitPerUser || 0;
 
-        if (slowModeSeconds > botConfig.maxSlowMode) {
+        if (botConfig.maxSlowMode > 0 && slowModeSeconds > botConfig.maxSlowMode) {
             logger.info(`🚫 [${channel.name}] Extreme slow mode ${slowModeSeconds}s (capped to ${botConfig.maxSlowMode}s)`);
             slowModeSeconds = botConfig.maxSlowMode;
         }
@@ -792,6 +918,11 @@ async function initializeAccount(account) {
             return;
         }
 
+        if (shouldReact(message)) {
+            const emoji = getReactionEmoji(message);
+            await addReactionToMessage(message, emoji);
+        }
+
         const now = Date.now();
 
         const slowModeSeconds = await getChannelSlowMode(message.channel);
@@ -834,6 +965,25 @@ async function initializeAccount(account) {
         }
 
         addToQueue(channelId, async () => {
+            const now = Date.now();
+            if (lastChannelResponse[channelId] && (now - lastChannelResponse[channelId] < effectiveCooldown)) {
+                const remMs = effectiveCooldown - (now - lastChannelResponse[channelId]);
+                const remSec = Math.ceil(remMs / 1000);
+                const remMin = Math.floor(remSec / 60);
+                const remSecOnly = remSec % 60;
+                
+                let rem = "";
+                if (remMin > 0) {
+                    rem += `${remMin}min `;
+                }
+                if (remSecOnly > 0 || remMin === 0) {
+                    rem += `${remSecOnly}sec`;
+                }
+                
+                logger.info(`⏳ [${displayName}] Queue skipped: ${rem.trim()} cooldown left`);
+                return;
+            }
+
             const reply = await generateAI(
                 `${HUMAN_PROMPT}\n\nPrevious conversation with ${username}:\n${userMemory}\n\nRecent History (last ${botConfig.historySize} messages):\n${messageHistory[channelId].join('\n')}`,
                 `Reply to ${username}: "${message.content}"`,
@@ -843,6 +993,7 @@ async function initializeAccount(account) {
             );
             if (reply) {
                 await message.channel.sendTyping();
+                const typingDelay = simulateTyping();
                 setTimeout(async () => {
                     const replyMethod = await sendMessage(message, reply);
                     if (replyMethod !== "blocked" && replyMethod !== "error") {
@@ -851,7 +1002,7 @@ async function initializeAccount(account) {
                         dailyResponseCount[channelId] = (dailyResponseCount[channelId] || 0) + 1;
                         logger.info(`💬 [${displayName}] response (${dailyResponseCount[channelId]}/${botConfig.maxResponsesPerDay})`);
                     }
-                }, botConfig.typingDelay);
+                }, typingDelay);
             } else {
                 logger.info(`🤖 [${displayName}] All APIs failed - skipping reply`);
             }
@@ -866,6 +1017,7 @@ function resetDailyCounter() {
     usedApiKeys.clear();
     lastGeneratedText = null;
     userContextMemory = {};
+    userTypingPatterns = {};
     logger.info('Daily counters and API keys reset');
 }
 
