@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# Secrets
+accounts.json
+api_keys.json
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
