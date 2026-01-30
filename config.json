@@ -1,0 +1,44 @@
+{
+  "ai": {
+    "maxResponsesPerDay": 50,
+    "cooldownMinutes": 0.5,
+    "channelCooldownMinutes": 1,
+    "minMessageLength": 1,
+    "skipRate": 0.1,
+    "userCooldownMinutes": 0.5,
+    "responseChance": 0.8,
+    "maxRepliesPerUser": 3,
+    "typingDelay": 2000,
+    "historySize": 5,
+    "autoSendEnabled": true,
+    "autoSendChance": 0.5,
+    "autoSendInterval": 900000,
+    "respondToGeneral": 0.5,
+    "respondToMention": 0.9,
+    "respondToOtherMention": 0.05,
+    "minReplyWords": 1,
+    "maxReplyWords": 10,
+    "replyStyle": "smart",
+    "respectSlowMode": true,
+    "promptLanguage": "en",
+    "useMessageFile": false,
+    "apiKeyRotation": true,
+    "maxSlowMode": 300,
+    "qualityFilter": true,
+    "personaEnabled": true,
+    "queueEnabled": true
+  },
+  "gm": {
+    "enabled": true,
+    "time": "09:00",
+    "timezone": "Africa/Tunis",
+    "message": "gm"
+  },
+  "api": {
+    "retryCount": 3,
+    "timeout": 5000,
+    "maxTokens": 25,
+    "temperature": 0.7,
+    "top_p": 0.9
+  }
+}
