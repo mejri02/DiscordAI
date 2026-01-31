@@ -33,6 +33,7 @@ let userContextMemory = {};
 let userTypingPatterns = {};
 let userMessageCount = {};
 let sentResponses = new Set();
+let channelPriorities = {};
 
 let HUMAN_PROMPT = "";
 
@@ -718,6 +719,11 @@ function addToQueue(channelId, processFn) {
         messageQueue[channelId] = [];
     }
 
+    const now = Date.now();
+    if (lastChannelResponse[channelId] && (now - lastChannelResponse[channelId] < (botConfig.channelCooldownMinutes * 60000))) {
+        return;
+    }
+
     messageQueue[channelId].push(processFn);
 
     if (messageQueue[channelId].length === 1) {
@@ -733,7 +739,9 @@ function processQueue(channelId) {
 
     const processFn = messageQueue[channelId][0];
     
-    const executeNext = () => {
+    processFn();
+    
+    setTimeout(() => {
         if (messageQueue[channelId] && messageQueue[channelId].length > 0) {
             messageQueue[channelId].shift();
         }
@@ -742,12 +750,7 @@ function processQueue(channelId) {
         } else {
             delete messageQueue[channelId];
         }
-    };
-
-    setTimeout(() => {
-        processFn();
-        setTimeout(executeNext, Math.random() * 3000 + 1000);
-    }, Math.random() * 5000 + 2000);
+    }, Math.random() * 3000 + 1000);
 }
 
 async function generateAI(systemPrompt, userPrompt, channelName, originalMessage, persona) {
@@ -855,7 +858,7 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
                 response = await axios.post(currentModel.endpoint, {
                     model: currentModel.modelName,
                     messages: [
-                        { role: "system", content: finalPrompt },
+                        { role: "system", content: fullSystemPrompt },
                         { role: "user", content: userPrompt }
                     ],
                     max_tokens: botConfig.apiMaxTokens,
@@ -1237,27 +1240,7 @@ async function initializeAccount(account) {
         const channelId = message.channel.id;
         const now = Date.now();
 
-        const slowModeSeconds = await getChannelSlowMode(message.channel);
-        const effectiveCooldown = Math.max(
-            slowModeSeconds * 1000,
-            botConfig.channelCooldownMinutes * 60000
-        );
-
-        if (lastChannelResponse[channelId] && (now - lastChannelResponse[channelId] < effectiveCooldown)) {
-            const remMs = effectiveCooldown - (now - lastChannelResponse[channelId]);
-            const remSec = Math.ceil(remMs / 1000);
-            const remMin = Math.floor(remSec / 60);
-            const remSecOnly = remSec % 60;
-
-            let rem = "";
-            if (remMin > 0) {
-                rem += `${remMin}min `;
-            }
-            if (remSecOnly > 0 || remMin === 0) {
-                rem += `${remSecOnly}sec`;
-            }
-
-            logger.info(`⏳ [${channelId}] Channel on cooldown: ${rem.trim()} left`);
+        if (lastChannelResponse[channelId] && (now - lastChannelResponse[channelId] < (botConfig.channelCooldownMinutes * 60000))) {
             return;
         }
 
@@ -1314,21 +1297,7 @@ async function initializeAccount(account) {
 
         addToQueue(channelId, async () => {
             const now = Date.now();
-            if (lastChannelResponse[channelId] && (now - lastChannelResponse[channelId] < effectiveCooldown)) {
-                const remMs = effectiveCooldown - (now - lastChannelResponse[channelId]);
-                const remSec = Math.ceil(remMs / 1000);
-                const remMin = Math.floor(remSec / 60);
-                const remSecOnly = remSec % 60;
-                
-                let rem = "";
-                if (remMin > 0) {
-                    rem += `${remMin}min `;
-                }
-                if (remSecOnly > 0 || remMin === 0) {
-                    rem += `${remSecOnly}sec`;
-                }
-                
-                logger.info(`⏳ [${displayName}] Queue skipped: ${rem.trim()} cooldown left`);
+            if (lastChannelResponse[channelId] && (now - lastChannelResponse[channelId] < (botConfig.channelCooldownMinutes * 60000))) {
                 return;
             }
 
