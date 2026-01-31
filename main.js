@@ -31,6 +31,8 @@ let messageQueue = {};
 let channelPersonas = {};
 let userContextMemory = {};
 let userTypingPatterns = {};
+let userMessageCount = {};
+let sentResponses = new Set();
 
 let HUMAN_PROMPT = "";
 
@@ -83,7 +85,7 @@ function shouldReact(message) {
     const now = Date.now();
     const userData = userTypingPatterns[authorId];
     
-    if (now - userData.lastReaction < 30000) return false;
+    if (now - userData.lastReaction < botConfig.reactionCooldown) return false;
     if (userData.reactionCount >= botConfig.maxReactionsPerUser) return false;
     
     return true;
@@ -138,6 +140,212 @@ async function addReactionToMessage(message, emoji) {
     }
 }
 
+function isLowValueContent(message) {
+    const content = message.content.trim();
+    
+    if (!botConfig.filterLowValue) return false;
+    
+    const emojiOnly = /^[\p{Emoji}\s]+$/u.test(content);
+    if (emojiOnly) return true;
+    
+    const urlOnly = /^(https?:\/\/[^\s]+)$/i.test(content);
+    if (urlOnly) return true;
+    
+    const commandLike = /^[!/][a-zA-Z]/.test(content);
+    if (commandLike) return true;
+    
+    const mentionSpam = (message.mentions.users.size > 3 || message.mentions.roles.size > 2);
+    if (mentionSpam) return true;
+    
+    const shortGeneric = content.length < 10 && /^(ok|yes|no|maybe|idk|lol|lmao|haha|hey|hi|hello|sup|yo|kk|k)$/i.test(content);
+    if (shortGeneric) return true;
+    
+    const repetitiveCheck = checkRepetitiveMessage(message);
+    if (repetitiveCheck) return true;
+    
+    return false;
+}
+
+function checkRepetitiveMessage(message) {
+    if (!botConfig.filterRepetitive) return false;
+    
+    const userId = message.author.id;
+    const channelId = message.channel.id;
+    const content = message.content.toLowerCase();
+    
+    if (!userMessageCount[channelId]) userMessageCount[channelId] = {};
+    if (!userMessageCount[channelId][userId]) userMessageCount[channelId][userId] = {
+        messages: [],
+        lastCleanup: Date.now()
+    };
+    
+    const userData = userMessageCount[channelId][userId];
+    userData.messages.push({
+        content: content,
+        timestamp: Date.now()
+    });
+    
+    if (Date.now() - userData.lastCleanup > 60000) {
+        userData.messages = userData.messages.filter(m => Date.now() - m.timestamp < 60000);
+        userData.lastCleanup = Date.now();
+    }
+    
+    const recentSame = userData.messages.filter(m => m.content === content).length;
+    return recentSame > 2;
+}
+
+function getRandomDelay() {
+    if (!botConfig.randomMessageDelay) return 0;
+    
+    const min = botConfig.minMessageDelay || 0;
+    const max = botConfig.maxMessageDelay || 10000;
+    
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function shouldAskQuestion() {
+    if (!botConfig.askQuestions) return false;
+    return Math.random() < botConfig.questionChance;
+}
+
+function formatAsQuestion(response) {
+    const questions = [
+        "what do you think about that?",
+        "have you tried that before?",
+        "how does that work exactly?",
+        "why do you say that?",
+        "when did you notice that?",
+        "where did you hear about that?",
+        "who showed you that?",
+        "is that something you're into?",
+        "do you have any experience with that?",
+        "would you recommend that?"
+    ];
+    
+    if (response.endsWith('?')) return response;
+    
+    const addQuestion = Math.random() < 0.5;
+    if (addQuestion) {
+        const randomQuestion = questions[Math.floor(Math.random() * questions.length)];
+        return `${response} ${randomQuestion}`;
+    }
+    
+    return response;
+}
+
+function addMemeReference(response) {
+    if (!botConfig.useMemes || Math.random() > botConfig.memeChance) return response;
+    
+    const memes = [
+        "fr fr no cap",
+        "that's what she said",
+        "it's giving main character energy",
+        "not me over here like",
+        "deadass though",
+        "lowkey highkey",
+        "periodt",
+        "and i oop",
+        "sksksks",
+        "yeet",
+        "sheesh",
+        "bet",
+        "slay",
+        "based",
+        "ratio",
+        "L + ratio + you fell off",
+        "touch grass",
+        "go outside",
+        "go off i guess",
+        "w rizz"
+    ];
+    
+    const meme = memes[Math.floor(Math.random() * memes.length)];
+    return Math.random() > 0.5 ? `${response} ${meme}` : `${meme} ${response}`;
+}
+
+function varyResponseLength(response) {
+    if (!botConfig.varyResponseLength) return response;
+    
+    const words = response.split(' ');
+    
+    if (Math.random() < 0.3 && words.length > 8) {
+        return words.slice(0, Math.floor(words.length * 0.7)).join(' ');
+    }
+    
+    if (Math.random() < 0.2 && words.length < 15) {
+        const additions = ['tbh', 'imo', 'fr', 'ngl', 'lowkey', 'highkey', 'deadass'];
+        const addition = additions[Math.floor(Math.random() * additions.length)];
+        return `${addition} ${response}`;
+    }
+    
+    return response;
+}
+
+async function editMessageWithTypo(message, response) {
+    if (!botConfig.editMessages || Math.random() > botConfig.editChance) return;
+    
+    setTimeout(async () => {
+        try {
+            const editedResponse = addTypo(response);
+            await message.edit(editedResponse);
+            logger.info(`✏️ Edited message with typo`);
+        } catch (error) {
+            
+        }
+    }, Math.random() * 3000 + 1000);
+}
+
+function addEmojis(response) {
+    if (!botConfig.useEmojis || Math.random() > botConfig.emojiChance) return response;
+    
+    const emojiMap = {
+        'happy': ['😊', '😄', '🙂', '😁', '🥰'],
+        'excited': ['🎉', '🚀', '🔥', '💯', '✨'],
+        'thinking': ['🤔', '🧐', '💭', '👀'],
+        'agree': ['👍', '👌', '✅', '🫡'],
+        'laugh': ['😂', '🤣', '😆', '💀'],
+        'sad': ['😢', '😔', '😞', '🥺'],
+        'love': ['❤️', '💕', '😍', '🥰'],
+        'shock': ['😲', '😮', '🤯', '😳'],
+        'cool': ['😎', '🆒', '💪', '😏'],
+        'random': ['🎯', '🫶', '🤝', '🙏', '✌️']
+    };
+    
+    const allEmojis = Object.values(emojiMap).flat();
+    const emoji = allEmojis[Math.floor(Math.random() * allEmojis.length)];
+    
+    return Math.random() > 0.5 ? `${response} ${emoji}` : `${emoji} ${response}`;
+}
+
+function checkRepetition(response) {
+    if (!botConfig.avoidRepetition) return false;
+    
+    const normalized = response.toLowerCase().trim();
+    
+    if (sentResponses.has(normalized)) {
+        logger.info(`🔄 Skipping repeated response: "${response}"`);
+        return true;
+    }
+    
+    sentResponses.add(normalized);
+    
+    if (sentResponses.size > 100) {
+        const arr = Array.from(sentResponses);
+        sentResponses = new Set(arr.slice(-50));
+    }
+    
+    return false;
+}
+
+function getDynamicTemperature() {
+    if (!botConfig.temperatureVariation) return botConfig.apiTemperature;
+    
+    const min = botConfig.minTemperature || 0.5;
+    const max = botConfig.maxTemperature || 0.9;
+    
+    return Math.random() * (max - min) + min;
+}
+
 function loadBotConfig() {
     try {
         const configData = fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8');
@@ -185,7 +393,29 @@ function loadBotConfig() {
             typingVariation: userConfig.ai?.typingVariation || 0.3,
             addReactions: userConfig.ai?.addReactions || false,
             reactionChance: userConfig.ai?.reactionChance || 0.3,
-            maxReactionsPerUser: userConfig.ai?.maxReactionsPerUser || 5
+            reactionCooldown: userConfig.ai?.reactionCooldown || 30000,
+            maxReactionsPerUser: userConfig.ai?.maxReactionsPerUser || 5,
+            editMessages: userConfig.ai?.editMessages || false,
+            editChance: userConfig.ai?.editChance || 0.1,
+            deleteMessages: userConfig.ai?.deleteMessages || false,
+            deleteChance: userConfig.ai?.deleteChance || 0.05,
+            askQuestions: userConfig.ai?.askQuestions || false,
+            questionChance: userConfig.ai?.questionChance || 0.2,
+            useMemes: userConfig.ai?.useMemes || false,
+            memeChance: userConfig.ai?.memeChance || 0.05,
+            varyResponseLength: userConfig.ai?.varyResponseLength || false,
+            randomMessageDelay: userConfig.ai?.randomMessageDelay || false,
+            minMessageDelay: userConfig.ai?.minMessageDelay || 0,
+            maxMessageDelay: userConfig.ai?.maxMessageDelay || 10000,
+            filterLowValue: userConfig.ai?.filterLowValue || true,
+            filterRepetitive: userConfig.ai?.filterRepetitive || true,
+            ignoreBots: userConfig.ai?.ignoreBots || true,
+            avoidRepetition: userConfig.ai?.avoidRepetition || true,
+            temperatureVariation: userConfig.ai?.temperatureVariation || false,
+            minTemperature: userConfig.ai?.minTemperature || 0.5,
+            maxTemperature: userConfig.ai?.maxTemperature || 0.9,
+            useEmojis: userConfig.ai?.useEmojis || false,
+            emojiChance: userConfig.ai?.emojiChance || 0.2
         };
 
         HUMAN_PROMPT = `You are a normal human participating casually in a Discord server.
@@ -260,7 +490,29 @@ Lowercase only. ${botConfig.minReplyWords}-${botConfig.maxReplyWords} words max.
             typingVariation: 0.3,
             addReactions: false,
             reactionChance: 0.3,
-            maxReactionsPerUser: 5
+            reactionCooldown: 30000,
+            maxReactionsPerUser: 5,
+            editMessages: false,
+            editChance: 0.1,
+            deleteMessages: false,
+            deleteChance: 0.05,
+            askQuestions: false,
+            questionChance: 0.2,
+            useMemes: false,
+            memeChance: 0.05,
+            varyResponseLength: false,
+            randomMessageDelay: false,
+            minMessageDelay: 0,
+            maxMessageDelay: 10000,
+            filterLowValue: true,
+            filterRepetitive: true,
+            ignoreBots: true,
+            avoidRepetition: true,
+            temperatureVariation: false,
+            minTemperature: 0.5,
+            maxTemperature: 0.9,
+            useEmojis: false,
+            emojiChance: 0.2
         };
         HUMAN_PROMPT = `...Lowercase only. 1-10 words max. No punctuation.`;
     }
@@ -480,13 +732,21 @@ function processQueue(channelId) {
     }
 
     const processFn = messageQueue[channelId][0];
+    
+    const executeNext = () => {
+        if (messageQueue[channelId] && messageQueue[channelId].length > 0) {
+            messageQueue[channelId].shift();
+        }
+        if (messageQueue[channelId] && messageQueue[channelId].length > 0) {
+            processQueue(channelId);
+        } else {
+            delete messageQueue[channelId];
+        }
+    };
 
     setTimeout(() => {
         processFn();
-        setTimeout(() => {
-            messageQueue[channelId].shift();
-            processQueue(channelId);
-        }, Math.random() * 3000 + 1000);
+        setTimeout(executeNext, Math.random() * 3000 + 1000);
     }, Math.random() * 5000 + 2000);
 }
 
@@ -495,6 +755,7 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
 
     let currentModel;
     let retryCount = 0;
+    const currentTemperature = getDynamicTemperature();
 
     while (retryCount < botConfig.apiRetryCount) {
         try {
@@ -503,7 +764,7 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
             const langPrompt = generateLanguageSpecificPrompt(userPrompt, botConfig.promptLanguage);
             const finalPrompt = `${fullSystemPrompt}\n\n${langPrompt}`;
 
-            logger.info(`🔑 [${channelName}] Trying ${currentModel.provider} (${currentModel.name}) [${persona}]`);
+            logger.info(`🔑 [${channelName}] Trying ${currentModel.provider} (${currentModel.name}) [${persona}] temp=${currentTemperature.toFixed(2)}`);
 
             let response;
             if (currentModel.provider === 'google') {
@@ -517,7 +778,7 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
                     }],
                     generationConfig: {
                         maxOutputTokens: botConfig.apiMaxTokens,
-                        temperature: botConfig.apiTemperature,
+                        temperature: currentTemperature,
                         topP: botConfig.apiTopP
                     }
                 }, {
@@ -559,6 +820,28 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
                     res = addTypo(res);
                 }
 
+                if (botConfig.askQuestions && shouldAskQuestion()) {
+                    res = formatAsQuestion(res);
+                }
+
+                if (botConfig.useMemes) {
+                    res = addMemeReference(res);
+                }
+
+                if (botConfig.varyResponseLength) {
+                    res = varyResponseLength(res);
+                }
+
+                if (botConfig.useEmojis) {
+                    res = addEmojis(res);
+                }
+
+                if (checkRepetition(res)) {
+                    usedApiKeys.add(currentModel.apiKey);
+                    retryCount++;
+                    continue;
+                }
+
                 const words = res.split(' ');
                 if (words.length > botConfig.maxReplyWords * 2) {
                     res = words.slice(0, botConfig.maxReplyWords * 2).join(' ');
@@ -576,7 +859,7 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
                         { role: "user", content: userPrompt }
                     ],
                     max_tokens: botConfig.apiMaxTokens,
-                    temperature: botConfig.apiTemperature,
+                    temperature: currentTemperature,
                     top_p: botConfig.apiTopP
                 }, {
                     headers: { 'Authorization': `Bearer ${currentModel.apiKey}`, 'Content-Type': 'application/json' },
@@ -629,6 +912,28 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
 
                 if (botConfig.addTypos) {
                     res = addTypo(res);
+                }
+
+                if (botConfig.askQuestions && shouldAskQuestion()) {
+                    res = formatAsQuestion(res);
+                }
+
+                if (botConfig.useMemes) {
+                    res = addMemeReference(res);
+                }
+
+                if (botConfig.varyResponseLength) {
+                    res = varyResponseLength(res);
+                }
+
+                if (botConfig.useEmojis) {
+                    res = addEmojis(res);
+                }
+
+                if (checkRepetition(res)) {
+                    usedApiKeys.add(currentModel.apiKey);
+                    retryCount++;
+                    continue;
                 }
 
                 const words = res.split(' ');
@@ -725,28 +1030,46 @@ async function sendMessage(message, reply) {
         const minutesAgo = (Date.now() - message.createdTimestamp) / 60000;
 
         if (botConfig.replyStyle === "mention") {
-            await message.channel.send(`${message.author} ${reply}`);
+            const sent = await message.channel.send(`${message.author} ${reply}`);
+            if (botConfig.editMessages) {
+                editMessageWithTypo(sent, reply);
+            }
             return "mention";
         }
         else if (botConfig.replyStyle === "discord_reply") {
-            await message.reply(reply);
+            const sent = await message.reply(reply);
+            if (botConfig.editMessages) {
+                editMessageWithTypo(sent, reply);
+            }
             return "discord_reply";
         }
         else if (botConfig.replyStyle === "smart") {
             if (minutesAgo > 2) {
                 if (Math.random() < 0.7) {
-                    await message.channel.send(`${message.author} ${reply}`);
+                    const sent = await message.channel.send(`${message.author} ${reply}`);
+                    if (botConfig.editMessages) {
+                        editMessageWithTypo(sent, reply);
+                    }
                     return "mention_old";
                 } else {
-                    await message.reply(reply);
+                    const sent = await message.reply(reply);
+                    if (botConfig.editMessages) {
+                        editMessageWithTypo(sent, reply);
+                    }
                     return "discord_reply_old";
                 }
             } else {
                 if (Math.random() < 0.8) {
-                    await message.reply(reply);
+                    const sent = await message.reply(reply);
+                    if (botConfig.editMessages) {
+                        editMessageWithTypo(sent, reply);
+                    }
                     return "discord_reply_recent";
                 } else {
-                    await message.channel.send(`${message.author} ${reply}`);
+                    const sent = await message.channel.send(`${message.author} ${reply}`);
+                    if (botConfig.editMessages) {
+                        editMessageWithTypo(sent, reply);
+                    }
                     return "mention_recent";
                 }
             }
@@ -754,13 +1077,22 @@ async function sendMessage(message, reply) {
         else {
             const rand = Math.random();
             if (rand < 0.7) {
-                await message.reply(reply);
+                const sent = await message.reply(reply);
+                if (botConfig.editMessages) {
+                    editMessageWithTypo(sent, reply);
+                }
                 return "discord_reply_rand";
             } else if (rand < 0.9) {
-                await message.channel.send(`${message.author} ${reply}`);
+                const sent = await message.channel.send(`${message.author} ${reply}`);
+                if (botConfig.editMessages) {
+                    editMessageWithTypo(sent, reply);
+                }
                 return "mention_rand";
             } else {
-                await message.channel.send(reply);
+                const sent = await message.channel.send(reply);
+                if (botConfig.editMessages) {
+                    editMessageWithTypo(sent, reply);
+                }
                 return "general_rand";
             }
         }
@@ -887,7 +1219,13 @@ async function initializeAccount(account) {
     });
 
     client.on('messageCreate', async (message) => {
-        if (message.author.id === client.user.id || message.content.length < botConfig.minMessageLength) return;
+        if (message.author.id === client.user.id) return;
+        
+        if (botConfig.ignoreBots && message.author.bot) {
+            return;
+        }
+
+        if (message.content.length < botConfig.minMessageLength) return;
 
         if (shouldSkipMessageType(message)) {
             return;
@@ -896,33 +1234,7 @@ async function initializeAccount(account) {
         const chCfg = account.channels.find(c => c.id === message.channel.id);
         if (!chCfg || !chCfg.useAI) return;
 
-        const channelInfo = await getChannelInfo(message.channel);
-        const persona = getChannelPersona(channelInfo.channelName);
-        const username = message.author.username;
         const channelId = message.channel.id;
-        const displayName = `${channelInfo.serverName}/${channelInfo.channelName}`;
-
-        if (!messageHistory[channelId]) messageHistory[channelId] = [];
-        messageHistory[channelId].push(`${username}: ${message.content}`);
-        if (messageHistory[channelId].length > botConfig.historySize) {
-            messageHistory[channelId].shift();
-        }
-
-        addToUserMemory(message.author.id, channelId, message.content);
-        const userMemory = getUserMemory(message.author.id, channelId);
-
-        logger.info(`📨 [${displayName}] ${username}: ${message.content.substring(0, 50)}... [${persona}]`);
-
-        if (message.attachments.size > 0) {
-            logger.info(`📎 [${displayName}] Skipping message with attachments`);
-            return;
-        }
-
-        if (shouldReact(message)) {
-            const emoji = getReactionEmoji(message);
-            await addReactionToMessage(message, emoji);
-        }
-
         const now = Date.now();
 
         const slowModeSeconds = await getChannelSlowMode(message.channel);
@@ -945,8 +1257,39 @@ async function initializeAccount(account) {
                 rem += `${remSecOnly}sec`;
             }
 
-            logger.info(`⏳ [${displayName}] cooldown: ${rem.trim()} left (slow mode: ${slowModeSeconds}s)`);
+            logger.info(`⏳ [${channelId}] Channel on cooldown: ${rem.trim()} left`);
             return;
+        }
+
+        const channelInfo = await getChannelInfo(message.channel);
+        const persona = getChannelPersona(channelInfo.channelName);
+        const username = message.author.username;
+        const displayName = `${channelInfo.serverName}/${channelInfo.channelName}`;
+
+        if (isLowValueContent(message)) {
+            logger.info(`⏭️ [Low Value] Skipping: ${message.content.substring(0, 50)}...`);
+            return;
+        }
+
+        if (!messageHistory[channelId]) messageHistory[channelId] = [];
+        messageHistory[channelId].push(`${username}: ${message.content}`);
+        if (messageHistory[channelId].length > botConfig.historySize) {
+            messageHistory[channelId].shift();
+        }
+
+        addToUserMemory(message.author.id, channelId, message.content);
+        const userMemory = getUserMemory(message.author.id, channelId);
+
+        logger.info(`📨 [${displayName}] ${username}: ${message.content.substring(0, 50)}... [${persona}]`);
+
+        if (message.attachments.size > 0) {
+            logger.info(`📎 [${displayName}] Skipping message with attachments`);
+            return;
+        }
+
+        if (shouldReact(message)) {
+            const emoji = getReactionEmoji(message);
+            await addReactionToMessage(message, emoji);
         }
 
         const isForBot = isMessageForBot(message, client);
@@ -962,6 +1305,11 @@ async function initializeAccount(account) {
         if (Math.random() < botConfig.skipRate) {
             logger.info(`⏭️  [${displayName}] Skipping (Ghost Mode)`);
             return;
+        }
+
+        const randomDelay = getRandomDelay();
+        if (randomDelay > 0) {
+            await new Promise(resolve => setTimeout(resolve, randomDelay));
         }
 
         addToQueue(channelId, async () => {
@@ -1018,6 +1366,8 @@ function resetDailyCounter() {
     lastGeneratedText = null;
     userContextMemory = {};
     userTypingPatterns = {};
+    userMessageCount = {};
+    sentResponses.clear();
     logger.info('Daily counters and API keys reset');
 }
 
