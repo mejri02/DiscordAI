@@ -4,9 +4,12 @@ const axios = require('axios');
 const readline = require('readline');
 const cron = require('node-cron');
 const sqlite3 = require('sqlite3').verbose();
+const Sentiment = require('sentiment');
 
 const DiscordClient = require('discord.js-selfbot-v13').Client;
 console.log('✅ Using discord.js-selfbot-v13');
+
+const sentiment = new Sentiment();
 
 const logger = {
     info: (msg) => console.log(`${new Date().toISOString()} [info]: ${msg}`),
@@ -31,6 +34,10 @@ let sentResponses = new Set();
 let skippedChannels = new Set();
 let dbConnections = {};
 let userProfiles = {};
+let pendingReplies = {};
+let channelCache = new Map();
+let rateLimiters = {};
+let channelLastMessageTime = {};
 
 let HUMAN_PROMPT = "";
 
@@ -44,6 +51,33 @@ const topics = {
     food: ['food', 'eat', 'cook', 'recipe', 'snack', 'meal', 'yummy'],
     anime: ['anime', 'manga', 'episode', 'series', 'character', 'aot', 'naruto', 'one piece']
 };
+
+const moods = {
+    excited: { emoji: ['!', 'awesome', 'great'], multiplier: 1.2 },
+    chill: { emoji: ['😌', 'cool', 'nice'], multiplier: 1.0 },
+    sarcastic: { emoji: ['🙄', 'oh really', 'sure'], multiplier: 0.9 },
+    joking: { emoji: ['😂', 'lol', 'funny'], multiplier: 1.1 },
+    lazy: { emoji: ['😴', 'whatever', 'maybe'], multiplier: 0.8 },
+    paranoid: { emoji: ['👀', 'you sure', 'hmm'], multiplier: 0.95 }
+};
+
+class RateLimiter {
+    constructor(maxRequests, timeWindow) {
+        this.maxRequests = maxRequests;
+        this.timeWindow = timeWindow;
+        this.requests = [];
+    }
+
+    canMakeRequest() {
+        const now = Date.now();
+        this.requests = this.requests.filter(t => now - t < this.timeWindow);
+        if (this.requests.length < this.maxRequests) {
+            this.requests.push(now);
+            return true;
+        }
+        return false;
+    }
+}
 
 function initDatabase(accountName) {
     const dbName = `conversations_${accountName.replace(/\s+/g, '_')}.db`;
@@ -64,6 +98,13 @@ function initDatabase(accountName) {
                 user_id TEXT PRIMARY KEY,
                 profile_data TEXT,
                 last_seen INTEGER
+            )`);
+
+            db.run(`CREATE TABLE IF NOT EXISTS channel_cache (
+                channel_id TEXT PRIMARY KEY,
+                server_name TEXT,
+                channel_name TEXT,
+                last_updated INTEGER
             )`);
         });
         logger.info(`📊 Database initialized: ${dbName}`);
@@ -107,6 +148,21 @@ function getMemoryContext(accountId, limit = 10) {
         } catch {
             resolve('');
         }
+    });
+}
+
+function hasResponded(accountId, messageId) {
+    if (!dbConnections[accountId]) return false;
+    
+    return new Promise((resolve) => {
+        dbConnections[accountId].get(
+            `SELECT bot_response FROM memory WHERE message_id = ?`,
+            [messageId],
+            (err, row) => {
+                if (err || !row) resolve(false);
+                resolve(!!(row && row.bot_response));
+            }
+        );
     });
 }
 
@@ -173,8 +229,28 @@ function detectTopic(text) {
     return 'general';
 }
 
+function analyzeSentiment(text) {
+    const result = sentiment.analyze(text);
+    if (result.score > 1) return 'positive';
+    if (result.score < -1) return 'negative';
+    return 'neutral';
+}
+
+function getBotMood(sentiment) {
+    const moodMap = {
+        'positive': ['excited', 'chill', 'joking'],
+        'negative': ['sarcastic', 'paranoid', 'lazy'],
+        'neutral': ['chill', 'joking', 'lazy']
+    };
+    const available = moodMap[sentiment] || ['chill'];
+    return available[Math.floor(Math.random() * available.length)];
+}
+
 function sanitizeMessage(message) {
-    let sanitized = message.toLowerCase();
+    let sanitized = message.replace(/[\*\_\~\`\#\'\"\;\:\-\_]+/g, '');
+    sanitized = sanitized.replace(/https?:\/\/[^\s]+/g, '[link]');
+    sanitized = sanitized.toLowerCase();
+    
     for (const word of bannedWords) {
         const regex = new RegExp(`\\b${word}\\b`, 'gi');
         sanitized = sanitized.replace(regex, '***');
@@ -249,6 +325,27 @@ function addTypo(text) {
     ];
     
     return typoTypes[Math.floor(Math.random() * typoTypes.length)]();
+}
+
+function getRandomEmojis(count = 1, mood = 'chill') {
+    if (Math.random() > 0.067) return '';
+    
+    const emojiMap = {
+        'excited': ['🤩', '🥳', '💥', '🎉'],
+        'chill': ['😌', '🍃', '🛋️', '✌️', '😎'],
+        'sarcastic': ['🙄', '😏', '🤷', '😒', '👀'],
+        'joking': ['😂', '🤣', '😜', '😝', '🤡'],
+        'lazy': ['😴', '💤', '🛌', '😪', '🥱'],
+        'paranoid': ['🫣', '🤐', '👀', '😬', '🙈']
+    };
+    
+    const emojis = emojiMap[mood] || emojiMap['chill'];
+    return Array(count).fill().map(() => emojis[Math.floor(Math.random() * emojis.length)]).join('');
+}
+
+function calculateTypingTime(response) {
+    const wordCount = response.split(' ').length;
+    return Math.min(5.0, 3.0 + (wordCount / 10.0));
 }
 
 function simulateTyping() {
@@ -402,6 +499,103 @@ function processQueue(channelId) {
     }, Math.random() * 5000 + 2000);
 }
 
+function queuePendingReply(channelId, message, targetMessageId) {
+    if (!pendingReplies[channelId]) pendingReplies[channelId] = [];
+    pendingReplies[channelId].push({ message, targetMessageId, timestamp: Date.now() });
+}
+
+async function processPendingReplies(channel, accountId) {
+    if (!pendingReplies[channel.id] || pendingReplies[channel.id].length === 0) return;
+    
+    const reply = pendingReplies[channel.id].shift();
+    const typingTime = calculateTypingTime(reply.message);
+    
+    try { await channel.sendTyping(); } catch {}
+    setTimeout(async () => {
+        await sendMessageWithReference(channel, reply.message, reply.targetMessageId, accountId);
+    }, typingTime * 1000);
+}
+
+async function sendMessageWithReference(channel, content, referenceId, accountId) {
+    try {
+        const message = await channel.send({
+            content: content,
+            reply: { messageReference: referenceId }
+        });
+        logger.info(`📤 Replied with reference: "${content}"`);
+        return message;
+    } catch (error) {
+        logger.error(`Error sending referenced message: ${error.message}`);
+        return null;
+    }
+}
+
+async function getCachedChannelInfo(channel) {
+    const cacheKey = channel.id;
+    
+    if (channelCache.has(cacheKey)) {
+        return channelCache.get(cacheKey);
+    }
+    
+    let serverName = 'Direct Message';
+    let channelName = channel.name || 'Unknown Channel';
+    
+    if (channel.guild) {
+        serverName = channel.guild.name || 'Unknown Server';
+    }
+    
+    const info = { serverName, channelName };
+    channelCache.set(cacheKey, info);
+    
+    try {
+        const cacheData = {};
+        if (fs.existsSync('channel_cache.json')) {
+            const existing = fs.readFileSync('channel_cache.json', 'utf8');
+            Object.assign(cacheData, JSON.parse(existing));
+        }
+        cacheData[cacheKey] = info;
+        fs.writeFileSync('channel_cache.json', JSON.stringify(cacheData, null, 2));
+    } catch (error) {
+        logger.error(`Failed to save channel cache: ${error.message}`);
+    }
+    
+    return info;
+}
+
+async function shouldStartConversation(channel, accountId) {
+    const quietThreshold = 5 * 60 * 1000;
+    const lastTime = channelLastMessageTime[channel.id] || 0;
+    const timeSinceLastMessage = Date.now() - lastTime;
+    
+    return timeSinceLastMessage > quietThreshold && Math.random() < 0.2;
+}
+
+async function generateContextualMessage(accountId, channelId, dominantTopic, sentiment, mood) {
+    const memoryContext = await getMemoryContext(accountId);
+    const prompt = `the chat has been quiet, start a conversation about ${dominantTopic} with ${sentiment} sentiment, mood is ${mood}. recent context: ${memoryContext}`;
+    
+    const responseType = getResponseType();
+    const enhancedPrompt = `${HUMAN_PROMPT}\n\nGenerate a casual message to start conversation. ${responseType.instruction}`;
+    
+    return await generateAI(enhancedPrompt, prompt, channelId, null, 'general', accountId);
+}
+
+async function makeRequestWithRetry(fn, maxRetries = 3) {
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            return await fn();
+        } catch (error) {
+            if (error.response?.status === 429) {
+                const waitTime = (i + 1) * 2000;
+                await new Promise(r => setTimeout(r, waitTime));
+                continue;
+            }
+            throw error;
+        }
+    }
+    return null;
+}
+
 function loadBotConfig() {
     try {
         const configData = fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8');
@@ -447,7 +641,9 @@ function loadBotConfig() {
             typingVariation: userConfig.ai?.typingVariation || 0.3,
             addReactions: userConfig.ai?.addReactions || false,
             reactionChance: userConfig.ai?.reactionChance || 0.3,
-            maxReactionsPerUser: userConfig.ai?.maxReactionsPerUser || 5
+            maxReactionsPerUser: userConfig.ai?.maxReactionsPerUser || 5,
+            quietChannelChance: userConfig.ai?.quietChannelChance || 0.2,
+            quietThreshold: userConfig.ai?.quietThreshold || 300
         };
 
         HUMAN_PROMPT = `You are a normal human in a Discord server. Lowercase only. ${botConfig.minReplyWords}-${botConfig.maxReplyWords} words max. No punctuation.`;
@@ -530,11 +726,14 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
     const fullSystemPrompt = applyPersonaToPrompt(systemPrompt, persona);
     
     const topic = detectTopic(userPrompt);
+    const sentiment = analyzeSentiment(userPrompt);
+    const mood = getBotMood(sentiment);
     const responseType = getResponseType();
     
     let enhancedPrompt = fullSystemPrompt;
     
     enhancedPrompt += `\n\nCurrent topic: ${topic}. Stay on topic.`;
+    enhancedPrompt += `\nSentiment: ${sentiment}. Mood: ${mood}. Match this vibe.`;
     enhancedPrompt += `\nAvoid these words: ${bannedWords.join(', ')}.`;
     enhancedPrompt += `\nUse natural speech patterns occasionally (like "um", "well", "like").`;
     enhancedPrompt += `\nSometimes correct yourself naturally (like "wait no", "i mean").`;
@@ -544,8 +743,17 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
     let retryCount = 0;
     const currentTemperature = botConfig.apiTemperature;
 
+    if (!rateLimiters[accountId]) {
+        rateLimiters[accountId] = new RateLimiter(30, 60000);
+    }
+
     while (retryCount < botConfig.apiRetryCount) {
         try {
+            if (!rateLimiters[accountId].canMakeRequest()) {
+                await new Promise(r => setTimeout(r, 2000));
+                continue;
+            }
+
             currentModel = getRandomApiKey();
 
             logger.info(`🔑 [${channelName}] Trying ${currentModel.provider} (${currentModel.name}) [${persona}]`);
@@ -588,6 +796,7 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
                 res = sanitizeMessage(res);
                 res = addDisfluencies(res);
                 res = addSelfCorrection(res);
+                res += getRandomEmojis(1, mood);
                 
                 if (botConfig.addTypos) {
                     res = addTypo(res);
@@ -633,6 +842,7 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
                 res = sanitizeMessage(res);
                 res = addDisfluencies(res);
                 res = addSelfCorrection(res);
+                res += getRandomEmojis(1, mood);
                 
                 if (botConfig.addTypos) {
                     res = addTypo(res);
@@ -715,7 +925,50 @@ async function initializeAccount(account) {
         dbConnections[account.name] = initDatabase(account.name);
         await loadUserProfiles(account.name);
 
+        try {
+            if (fs.existsSync('channel_cache.json')) {
+                const cacheData = JSON.parse(fs.readFileSync('channel_cache.json', 'utf8'));
+                for (const [id, info] of Object.entries(cacheData)) {
+                    channelCache.set(id, info);
+                }
+            }
+        } catch (error) {
+            logger.error(`Failed to load channel cache: ${error.message}`);
+        }
+
         activeClients.push({ client, account });
+
+        setInterval(async () => {
+            for (const channelConfig of account.channels) {
+                const channel = client.channels.cache.get(channelConfig.id);
+                if (channel && channelConfig.useAI) {
+                    await processPendingReplies(channel, account.name);
+                    
+                    if (await shouldStartConversation(channel, account.name)) {
+                        const recentMessages = await channel.messages.fetch({ limit: 5 });
+                        const topics = recentMessages.map(m => detectTopic(m.content));
+                        const sentiments = recentMessages.map(m => analyzeSentiment(m.content));
+                        const dominantTopic = topics.sort((a,b) => 
+                            topics.filter(v => v===a).length - topics.filter(v => v===b).length
+                        ).pop() || 'general';
+                        const dominantSentiment = sentiments.sort((a,b) => 
+                            sentiments.filter(v => v===a).length - sentiments.filter(v => v===b).length
+                        ).pop() || 'neutral';
+                        const mood = getBotMood(dominantSentiment);
+                        
+                        const response = await generateContextualMessage(account.name, channel.id, dominantTopic, dominantSentiment, mood);
+                        if (response) {
+                            try { await channel.sendTyping(); } catch {}
+                            setTimeout(async () => {
+                                await channel.send(response);
+                                logger.info(`📤 Started conversation: "${response}"`);
+                                addToMemory(account.name, null, 'system', 'quiet channel start', response, dominantTopic);
+                            }, calculateTypingTime(response) * 1000);
+                        }
+                    }
+                }
+            }
+        }, 300000);
     });
 
     client.on('messageCreate', async (message) => {
@@ -727,10 +980,12 @@ async function initializeAccount(account) {
         const chCfg = account.channels.find(c => c.id === message.channel.id);
         if (!chCfg || !chCfg.useAI) return;
 
+        channelLastMessageTime[message.channel.id] = Date.now();
+
         const channelId = message.channel.id;
         const now = Date.now();
 
-        const channelInfo = await getChannelInfo(message.channel);
+        const channelInfo = await getCachedChannelInfo(message.channel);
         const persona = getChannelPersona(channelInfo.channelName);
         const username = message.author.username;
         const displayName = `${channelInfo.serverName}/${channelInfo.channelName}`;
@@ -773,16 +1028,21 @@ async function initializeAccount(account) {
             return;
         }
 
+        const hasResp = await hasResponded(account.name, message.id);
+        if (hasResp) return;
+
         addToQueue(channelId, async () => {
             const topic = detectTopic(message.content);
+            const sentiment = analyzeSentiment(message.content);
+            const mood = getBotMood(sentiment);
             const memoryContext = await getMemoryContext(account.name);
             const userContext = Object.entries(userProfile)
                 .map(([k, v]) => `${k}: ${v}`)
                 .join(', ');
 
             const reply = await generateAI(
-                `${HUMAN_PROMPT}\n\nUser: ${userMemory}\n\nUser preferences: ${userContext}\n\nRecent:\n${messageHistory[channelId].join('\n')}\n\nMemory:\n${memoryContext}`,
-                `Reply to ${username}: "${message.content}"`,
+                `${HUMAN_PROMPT}\n\nUser preferences: ${userContext}\n\nRecent:\n${messageHistory[channelId].join('\n')}\n\nMemory:\n${memoryContext}`,
+                `Reply to ${username}: "${message.content}" with ${mood} mood and ${sentiment} sentiment`,
                 displayName,
                 message.content,
                 persona,
@@ -792,19 +1052,19 @@ async function initializeAccount(account) {
             if (reply) {
                 try { await message.channel.sendTyping(); } catch {}
                 
-                const typingDelay = simulateTyping();
+                const typingTime = calculateTypingTime(reply);
                 setTimeout(async () => {
                     const replyMethod = await sendMessage(message, reply);
                     if (replyMethod !== "blocked") {
                         logger.info(`📤 [${displayName}] @${username}: "${reply}"`);
                         addToMemory(account.name, message.id, username, message.content, reply, topic);
                     }
-                }, typingDelay);
+                }, typingTime * 1000);
             }
         });
     });
 
-    await client.login(account.token);
+    await makeRequestWithRetry(() => client.login(account.token));
 }
 
 function resetDailyCounter() {
@@ -987,7 +1247,7 @@ async function fetchChannelsInteractive() {
 }
 
 async function startBot() {
-    console.log('🤖 Discord AI Bot - Enhanced Edition\n');
+    console.log('🤖 Discord AI Bot - Ultra Enhanced Edition\n');
 
     loadBotConfig();
     const accounts = await loadConfigs();
@@ -1014,7 +1274,7 @@ async function startBot() {
 }
 
 console.log('══════════════════════════════');
-console.log('🤖 Discord AI Bot - Enhanced');
+console.log('🤖 Discord AI Bot - Ultra Enhanced');
 console.log('══════════════════════════════\n');
 console.log('1. Start bot');
 console.log('2. Fetch channels\n');
