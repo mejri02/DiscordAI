@@ -109,10 +109,11 @@ node setup.js
 
 3. **AI Provider Setup**:
    Choose your preferred AI provider:
-   - **Option 1**: Grok API (xAI) — Get key from https://console.x.ai/
-   - **Option 2**: OpenAI — Get key from https://platform.openai.com/
-   - **Option 3**: Google Gemini — Get key from https://aistudio.google.com/
-   - **Option 4**: Custom API endpoint
+   - **Option 1**: ⭐ Groq (Recommended) — Free, very fast. Get key from https://console.groq.com/keys
+   - **Option 2**: Grok API (xAI) — Get key from https://console.x.ai/
+   - **Option 3**: OpenAI — Get key from https://platform.openai.com/
+   - **Option 4**: Google Gemini — Get key from https://aistudio.google.com/
+   - **Option 5**: Custom API endpoint
 
    After selecting a provider, you'll be prompted to add additional API keys for rotation (up to 5 extra keys).
 
@@ -206,6 +207,24 @@ Create `accounts.json`:
 
 Create `api_keys.json`:
 
+> ⭐ **Recommended: Groq** — Free tier, extremely fast inference, no credit card required. Get your key at https://console.groq.com/keys
+
+**For Groq (Recommended):**
+```json
+{
+  "models": [
+    {
+      "name": "Groq Llama",
+      "provider": "openai",
+      "apiKey": "YOUR_GROQ_API_KEY",
+      "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+      "modelName": "llama-3.1-8b-instant",
+      "enabled": true
+    }
+  ]
+}
+```
+
 **For Grok (xAI):**
 ```json
 {
@@ -259,24 +278,33 @@ Create `api_keys.json`:
 {
   "models": [
     {
-      "name": "Grok API",
-      "provider": "xai",
-      "apiKey": "YOUR_GROK_KEY",
-      "endpoint": "https://api.x.ai/v1/chat/completions",
-      "modelName": "grok-beta",
+      "name": "Groq Llama",
+      "provider": "openai",
+      "apiKey": "YOUR_GROQ_KEY",
+      "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+      "modelName": "llama-3.1-8b-instant",
       "enabled": true
     },
     {
-      "name": "OpenAI GPT-3.5",
+      "name": "Groq Llama Key 2",
       "provider": "openai",
-      "apiKey": "YOUR_OPENAI_KEY",
-      "endpoint": "https://api.openai.com/v1/chat/completions",
-      "modelName": "gpt-3.5-turbo",
+      "apiKey": "YOUR_SECOND_GROQ_KEY",
+      "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+      "modelName": "llama-3.1-8b-instant",
+      "enabled": true
+    },
+    {
+      "name": "Google Gemini",
+      "provider": "google",
+      "apiKey": "YOUR_GOOGLE_KEY",
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
+      "modelName": "gemini-pro",
       "enabled": true
     }
   ]
 }
 ```
+> 💡 Tip: You can create multiple free Groq accounts to get more API keys for rotation.
 
 ## Running the Bot
 
