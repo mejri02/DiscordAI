@@ -1,37 +1,45 @@
 # Discord AI Bot
 
-A sophisticated Discord selfbot that uses AI to respond naturally in conversations, mimicking human behavior with context awareness, persona adaptation, and intelligent response patterns.
+A sophisticated Discord selfbot that uses AI to respond naturally in conversations, mimicking human behavior with context awareness, persona adaptation, anti-detection systems, and intelligent response patterns.
 
 **⚠️ IMPORTANT DISCLAIMER**: Using selfbots violates Discord's Terms of Service. This project is for educational purposes only. Use at your own risk. Your account may be banned.
 
 ## Features
 
 - 🤖 **AI-Powered Responses**: Integrates with multiple AI providers (Grok, OpenAI, Google Gemini)
-- 🎭 **Dynamic Personas**: Adapts conversation style based on channel context (crypto, gaming, tech, music, movies)
-- 💬 **Natural Behavior**:
-  - Random response delays and typing indicators
+- 🎭 **Dynamic Personas**: Adapts conversation style based on channel context (crypto, gaming, tech, music, movies, anime, food, sports)
+- 💬 **Natural Human Behavior**:
+  - Read delay before typing — simulates actually reading the message first
+  - Random response delays and realistic typing indicators
   - Smart reply detection (mentions, replies, general messages)
-  - Quality filtering to avoid repetitive or generic responses
   - Context-aware responses using message history
   - Human-like disfluencies (um, well, like) and self-corrections
   - Configurable typo injection for realism
   - Variable typing speed simulation
+  - Natural conversation fade instead of hard reply cut-offs
+- 🛡️ **Anti-Detection System**:
+  - Sleep schedule — goes offline during configurable night hours
+  - Random AFK breaks (30–90 minutes) during the day
+  - Delayed emoji reactions (15–120 seconds after the message)
+  - Hourly response budget to avoid activity spikes
+  - Burst protection — skips replies when a channel is moving too fast
+  - Per-channel cooldowns with randomized jitter
+  - "Are you a bot?" interceptor with natural human denials
+  - Hardened AI prompt that resists bot self-disclosure
 - 🔄 **Advanced Features**:
   - API key rotation for rate limit handling
-  - Message queuing system
-  - Slow mode detection and respect
+  - Message queuing system with burst protection
   - User context memory and profiles
-  - Auto-send messages periodically
-  - Daily "GM" (good morning) scheduler
+  - Auto-send messages by reacting to real past messages (not invented topics)
   - SQLite conversation database
-  - Topic detection
-  - Emoji reaction support
-- 🛡️ **Safety Features**:
-  - Response quality filters
-  - Cooldown management (global, per-channel, per-user)
-  - Daily response limits
-  - Banned words/phrase detection
-  - Max replies per user limit
+  - Topic and sentiment detection
+  - Delayed emoji reaction support
+  - Heartbeat logging every 5 minutes
+- 📊 **Smart Response Logic**:
+  - Near-certain replies to direct mentions (95%)
+  - Progressive reply fade instead of hard user limits
+  - Per-user cooldown starts only after a reply is sent
+  - Channel cooldown with ±30% jitter variance
 
 ## Requirements
 
@@ -54,7 +62,7 @@ npm install
 ### Required Dependencies
 
 ```bash
-npm install discord.js-selfbot-v13 axios node-cron
+npm install discord.js-selfbot-v13 axios node-cron sqlite3 sentiment
 ```
 
 ## Setup
@@ -125,58 +133,45 @@ Create `config.json`:
 ```json
 {
   "ai": {
-    "maxResponsesPerDay": 50,
-    "cooldownMinutes": 0.5,
-    "channelCooldownMinutes": 1,
-    "userCooldownMinutes": 0.5,
+    "maxResponsesPerDay": 3000,
+    "channelCooldownMinutes": 2,
+    "userCooldownMinutes": 2,
     "minMessageLength": 3,
-    "skipRate": 0.20,
-    "responseChance": 0.60,
-    "maxRepliesPerUser": 3,
-    "typingDelay": 2000,
-    "historySize": 5,
-    "autoSendEnabled": true,
-    "autoSendChance": 0.50,
-    "autoSendInterval": 900000,
-    "respondToGeneral": 0.40,
-    "respondToMention": 0.90,
-    "respondToOtherMention": 0.05,
+    "skipRate": 0.2,
+    "responseChance": 0.35,
+    "respondToGeneral": 0.25,
+    "maxRepliesPerUser": 4,
+    "typingDelay": 3500,
+    "varyTypingSpeed": true,
+    "typingVariation": 0.4,
+    "historySize": 8,
     "minReplyWords": 2,
-    "maxReplyWords": 15,
+    "maxReplyWords": 20,
     "replyStyle": "smart",
-    "respectSlowMode": true,
-    "promptLanguage": "en",
-    "useMessageFile": false,
-    "apiKeyRotation": true,
-    "maxSlowMode": 300,
-    "qualityFilter": true,
+    "autoSendEnabled": true,
+    "autoSendChance": 0.15,
+    "autoSendInterval": 1800000,
+    "quietThreshold": 300,
+    "addReactions": true,
+    "reactionChance": 0.15,
+    "maxReactionsPerUser": 3,
+    "addTypos": true,
     "personaEnabled": true,
     "queueEnabled": true,
-    "addTypos": true,
-    "typoChance": 0.15,
-    "varyTypingSpeed": true,
-    "typingVariation": 0.3,
-    "addReactions": true,
-    "reactionChance": 0.3,
-    "maxReactionsPerUser": 5,
+    "apiKeyRotation": true,
     "databaseEnabled": true,
-    "bannedWordsEnabled": true,
-    "disfluenciesEnabled": true,
-    "selfCorrectionEnabled": true,
-    "topicDetection": true,
-    "userProfiles": true
-  },
-  "gm": {
-    "enabled": true,
-    "time": "09:00",
-    "timezone": "Africa/Tunis",
-    "message": "gm"
+    "userProfiles": true,
+    "sleepScheduleEnabled": true,
+    "sleepStart": 1,
+    "sleepEnd": 8,
+    "sleepTimezoneOffset": 1,
+    "randomAfkEnabled": true
   },
   "api": {
     "retryCount": 3,
-    "timeout": 5000,
-    "maxTokens": 35,
-    "temperature": 0.7,
+    "timeout": 8000,
+    "maxTokens": 40,
+    "temperature": 0.85,
     "top_p": 0.9
   }
 }
@@ -285,8 +280,6 @@ Create `api_keys.json`:
 
 ## Running the Bot
 
-### Start the Bot
-
 ```bash
 node main.js
 ```
@@ -295,250 +288,191 @@ Then select:
 - **Option 1**: Start bot — Runs the bot with current configuration
 - **Option 2**: Fetch channels — Interactive channel selection and management
 
-### Commands While Running
-
-- Type `fetch` — Get instructions to fetch new channels (requires restart)
-- Type `exit` — Shutdown the bot gracefully
-- Press `Ctrl+C` — Force stop the bot
-
 ## Configuration Guide
 
 ### AI Behavior Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `maxResponsesPerDay` | 50 | Maximum AI responses per channel daily |
-| `cooldownMinutes` | 0.5 | Global cooldown between responses (minutes) |
-| `channelCooldownMinutes` | 1 | Per-channel cooldown (minutes) |
-| `userCooldownMinutes` | 0.5 | Per-user cooldown (minutes) |
-| `maxRepliesPerUser` | 3 | Max consecutive replies to one user |
-| `responseChance` | 0.60 | Probability of responding (0–1) |
-| `skipRate` | 0.20 | Chance to skip responding for realism |
-| `typingDelay` | 2000 | Delay before sending (milliseconds) |
-| `historySize` | 5 | Number of messages to remember |
+| `maxResponsesPerDay` | 3000 | Maximum AI responses per account daily |
+| `channelCooldownMinutes` | 2 | Per-channel cooldown with ±30% jitter |
+| `userCooldownMinutes` | 2 | Per-user cooldown — starts only after a reply is sent |
+| `minMessageLength` | 3 | Ignore messages shorter than this |
+| `skipRate` | 0.2 | Extra random chance to skip a reply for realism |
+| `responseChance` | 0.35 | Base probability of responding to general messages |
+| `respondToGeneral` | 0.25 | Chance to reply to messages not directed at the bot |
+| `maxRepliesPerUser` | 4 | Replies before fade starts (not a hard cut-off) |
+| `typingDelay` | 3500 | Base typing delay in milliseconds |
+| `historySize` | 8 | Number of past messages used for context |
+
+### Anti-Detection Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `sleepScheduleEnabled` | true | Enable offline sleep window |
+| `sleepStart` | 1 | Hour to go offline (24h, local time) |
+| `sleepEnd` | 8 | Hour to come back online (24h, local time) |
+| `sleepTimezoneOffset` | 1 | UTC offset for your timezone (Tunisia = UTC+1) |
+| `randomAfkEnabled` | true | Enable random 30–90 min AFK breaks during the day |
+| `reactionChance` | 0.15 | Chance to react — reactions are delayed 15–120 seconds |
+| `maxReactionsPerUser` | 3 | Max reactions per user to avoid looking spammy |
 
 ### Response Triggers
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `respondToMention` | 0.90 | Respond when directly mentioned |
-| `respondToGeneral` | 0.40 | Respond to general messages |
-| `respondToOtherMention` | 0.05 | Respond when others are mentioned |
+| `respondToGeneral` | 0.25 | Chance to reply to general chat messages |
+| Direct mentions | 95% | Always near-certain — hardcoded, ignoring a mention looks suspicious |
 
 ### Reply Style Options
 
 | Style | Behavior |
 |-------|----------|
-| `smart` | Intelligently chooses between mention and reply based on message age |
+| `smart` | Intelligently chooses between mention and reply based on context |
 | `mention` | Always mentions the user |
 | `discord_reply` | Always uses Discord's reply feature |
-| `random` | Randomly chooses reply style |
 
 ### Persona System
 
 The bot adapts its language based on channel names or per-channel configuration:
 
-- **Crypto Channels** (`crypto`, `trading`, `bitcoin`, `eth`): Uses crypto slang (moon, HODL, diamond hands)
-- **Gaming Channels** (`game`, `play`, `rank`): Gaming terminology (gg, op, nerf, buff)
-- **Tech Channels** (`tech`, `code`, `program`): Technical jargon (npm, debugging, bugs)
-- **Music Channels** (`music`, `song`, `band`): Music-related terms (vibes, playlist, beat)
-- **Movie Channels** (`movie`, `film`, `netflix`): Film terminology (plot twist, spoilers, CGI)
+- **Crypto** (`crypto`, `trading`, `finance`): Crypto slang and trading talk
+- **Gaming** (`game`, `gaming`, `play`): Gaming terminology
+- **Tech** (`tech`, `code`, `dev`): Technical jargon, kept casual
+- **Music** (`music`, `songs`, `beats`): Music-related terms and vibes
+- **Movie** (`movie`, `film`, `tv`): Film and series references
+- **Food** (`food`, `cooking`, `recipes`): Food and eating talk
+- **Anime** (`anime`, `manga`): Anime references and shows
+- **Sports** (`sports`, `ball`): Sports scores and player talk
+- **Casual** (`general`, `chat`, `lounge`): Normal chill conversation
 
-Personas can be assigned per channel during setup (Option 6) or manually in `accounts.json` via the `persona` field. Disable personas globally by setting `personaEnabled: false` in `config.json`.
+Personas can be assigned per channel in `accounts.json` via the `persona` field. Disable globally with `personaEnabled: false`.
 
 ### Human-like Behavior Features
 
+#### Read Delay
+Before the typing indicator fires, the bot waits 1.5–8 seconds scaled to message length — simulating actually reading the message first.
+
 #### Typos
 ```json
-{
-  "addTypos": true,
-  "typoChance": 0.15
-}
+{ "addTypos": true }
 ```
-Randomly injects realistic typos into responses to mimic human typing.
+Randomly injects realistic typos (common word substitutions and letter swaps).
 
 #### Variable Typing Speed
 ```json
-{
-  "varyTypingSpeed": true,
-  "typingVariation": 0.3
-}
+{ "varyTypingSpeed": true, "typingVariation": 0.4 }
 ```
-Varies the typing indicator duration to simulate natural typing speed fluctuations.
+Varies typing indicator duration to simulate natural speed fluctuations.
 
 #### Disfluencies & Self-Corrections
-```json
-{
-  "disfluenciesEnabled": true,
-  "selfCorrectionEnabled": true
-}
-```
-Adds filler words (um, well, like) and occasional self-corrections (wait no, i mean) for natural-sounding messages.
+Always active — adds filler words (um, well, like) and occasional self-corrections (wait no, i mean).
 
-#### Reactions
+#### Delayed Reactions
+```json
+{ "addReactions": true, "reactionChance": 0.15, "maxReactionsPerUser": 3 }
+```
+Reacts to messages after a 15–120 second delay, not instantly. Capped per user to avoid spam.
+
+#### Sleep Schedule
 ```json
 {
-  "addReactions": true,
-  "reactionChance": 0.3,
-  "maxReactionsPerUser": 5
+  "sleepScheduleEnabled": true,
+  "sleepStart": 1,
+  "sleepEnd": 8,
+  "sleepTimezoneOffset": 1
 }
 ```
-Randomly reacts to messages with emoji, capped per user to avoid spam.
+The bot goes completely silent during the configured night window. Channel messages are still logged — only replies are blocked.
+
+#### Random AFK Breaks
+```json
+{ "randomAfkEnabled": true }
+```
+~4% chance per message event to trigger a random 30–90 minute silence. Resets automatically.
+
+#### "Are You a Bot?" Intercept
+Automatically detected and handled with casual human denials (`lol no`, `bruh no`, `nah im real`, etc.) without involving the AI.
+
+#### Hourly Budget Enforcement
+With 3000 responses/day and ~16 active hours, the bot enforces a per-hour rate limit. If it exceeds 1.5× the hourly average it pauses automatically to avoid suspicious activity spikes.
+
+#### Burst Protection
+If 3+ messages queue up in a channel simultaneously, overflow is dropped. Real people don't reply to every message in a fast conversation.
+
+#### Conversation Fade
+Instead of replying exactly N times then going completely silent, the bot progressively reduces its reply chance after `maxRepliesPerUser` — 50% → 25% → 12.5% — so conversations end naturally.
 
 ### Database & Memory
 
 ```json
-{
-  "databaseEnabled": true,
-  "userProfiles": true,
-  "topicDetection": true
-}
+{ "databaseEnabled": true, "userProfiles": true }
 ```
 
-When enabled, conversation history is stored in per-account SQLite databases (`conversations_<account>.db`). User profiles track preferences and past interactions. Topic detection adjusts response style based on what's being discussed.
+Conversation history is stored in per-account SQLite databases (`conversations_<account>.db`). User profiles track preferences and past interactions for more contextual replies.
 
 ### Auto-Send Feature
-
-Periodically sends messages to keep channels active:
 
 ```json
 {
   "autoSendEnabled": true,
-  "autoSendChance": 0.50,
-  "autoSendInterval": 900000
+  "autoSendChance": 0.15,
+  "autoSendInterval": 1800000,
+  "quietThreshold": 300
 }
 ```
 
-- `autoSendEnabled`: Enable/disable auto-sending
-- `autoSendChance`: Probability of auto-send (0–1)
-- `autoSendInterval`: Time between attempts (milliseconds)
+Checks every 30 minutes if a channel has been quiet. When triggered, the bot reacts to something that was actually said recently — not an invented topic — so it looks like catching up after being away.
 
-### GM (Good Morning) Scheduler
-
-Automatically sends morning greetings:
-
-```json
-{
-  "gm": {
-    "enabled": true,
-    "time": "09:00",
-    "timezone": "Africa/Tunis",
-    "message": "gm"
-  }
-}
-```
-
-Random variations will be used if message is `"gm"`: gm, gm frens, good morning, gm all, morning, etc.
-
-## Advanced Features
+- `autoSendChance`: Probability of sending (15% by default — conservative)
+- `autoSendInterval`: Time between checks in milliseconds (1800000 = 30 min)
+- `quietThreshold`: Seconds of silence before auto-send can trigger (300 = 5 min)
 
 ### API Key Rotation
 
-Enable automatic rotation to handle rate limits:
-
 ```json
-{
-  "ai": {
-    "apiKeyRotation": true
-  }
-}
+{ "apiKeyRotation": true }
 ```
 
-When a key hits a rate limit (429 error), it is automatically cycled out for 24 hours. Add multiple keys in `api_keys.json` or via the setup wizard (supports up to 5 extra keys per provider).
-
-### Quality Filtering
-
-Filters out low-quality responses:
-
-```json
-{
-  "ai": {
-    "qualityFilter": true
-  }
-}
-```
-
-Blocks repetitive greetings, generic one-word responses, duplicate messages, and overly repetitive content.
-
-### Banned Words
-
-```json
-{
-  "bannedWordsEnabled": true
-}
-```
-
-Prevents the bot from sending messages containing configured forbidden phrases.
+When a key hits a rate limit (429 error), it is automatically cycled out. Add multiple keys in `api_keys.json` for more coverage. All keys reset daily.
 
 ### Message Queue System
 
-Prevents spam and maintains natural flow:
-
 ```json
-{
-  "ai": {
-    "queueEnabled": true
-  }
-}
+{ "queueEnabled": true }
 ```
 
-### Slow Mode Respect
-
-Automatically detects and respects channel slow mode:
-
-```json
-{
-  "ai": {
-    "respectSlowMode": true,
-    "maxSlowMode": 300
-  }
-}
-```
-
-### Multi-Account Support
-
-Use Option 5 in the setup menu to configure up to 3 Discord accounts, each with their own channel list.
-
-```json
-[
-  {
-    "name": "Bot 1",
-    "token": "TOKEN_1",
-    "channels": []
-  },
-  {
-    "name": "Bot 2",
-    "token": "TOKEN_2",
-    "channels": []
-  }
-]
-```
+Prevents spam and maintains natural flow. Maximum 2 pending replies per channel — overflow is dropped when chat is moving fast.
 
 ## Troubleshooting
 
-### Bot doesn't respond
+### Bot is running but shows no messages
 
-1. Check if AI is enabled for the channel (`useAI: true` in `accounts.json`)
+Check if you're inside the sleep window. By default the bot sleeps 1am–8am local time. Channel messages are always logged — if you see nothing at all, check that the channel IDs in `accounts.json` match your actual channels.
+
+### Bot doesn't respond to messages it can see
+
+1. Check `useAI: true` is set for that channel in `accounts.json`
 2. Verify API keys are valid in `api_keys.json`
-3. Check response chance settings aren't too low
-4. Ensure bot has read/send permissions in the channel
+3. Check `responseChance` and `respondToGeneral` aren't set too low
+4. Confirm the account has read/send permissions in the channel
+5. The bot may be in an AFK break — wait a few minutes
 
 ### "All API keys rate limited" error
 
-- Wait 24 hours for rate limits to reset
-- Add more API keys to `api_keys.json` or via setup Option 1
-- Reduce `maxResponsesPerDay` in `config.json`
+- Wait for rate limits to reset (usually 1 hour)
+- Add more API keys to `api_keys.json`
+- Lower `maxResponsesPerDay` in `config.json`
 
 ### Invalid Discord token
 
 1. Token may have expired — get a new one using the F12 method
 2. Ensure no extra spaces in the token
-3. Token must start with the account type prefix
+3. Token must be the full string starting with the account prefix
 
 ### Installation errors
 
 ```bash
-# Try clearing cache and reinstalling
 rm -rf node_modules package-lock.json
 npm cache clean --force
 npm install
@@ -560,12 +494,13 @@ discord-ai-bot/
 
 ## Safety & Best Practices
 
-1. **Never share your Discord token** — It provides full access to your account
-2. **Never share your API keys** — They can incur charges on your account
-3. **Use a test/alt account** — Don't risk your main Discord account
-4. **Monitor bot behavior** — Ensure it's not spamming or breaking server rules
-5. **Respect rate limits** — Don't set response rates too high
-6. **Stay within ToS** — Remember selfbots violate Discord ToS
+1. **Never share your Discord token** — it provides full access to your account
+2. **Never share your API keys** — they can incur charges
+3. **Use an alt account** — don't risk your main Discord account
+4. **Keep `responseChance` and `respondToGeneral` low** — less activity = less suspicion
+5. **Enable the sleep schedule** — accounts that never go offline are suspicious
+6. **Don't run in too many channels at once** — focus on 2–3 per account
+7. **Monitor the logs** — watch for rate limit warnings or blocked messages
 
 ## Legal Disclaimer
 

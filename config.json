@@ -1,32 +1,36 @@
 {
   "ai": {
     "maxResponsesPerDay": 3000,
-    "channelCooldownMinutes": 1,
-    "minMessageLength": 2,
-    "skipRate": 0.15,
-    "userCooldownMinutes": 1,
-    "responseChance": 0.5,
-    "maxRepliesPerUser": 3,
-    "typingDelay": 3000,
+    "channelCooldownMinutes": 2,
+    "userCooldownMinutes": 2,
+    "minMessageLength": 3,
+    "skipRate": 0.2,
+    "responseChance": 0.35,
+    "respondToGeneral": 0.25,
+    "maxRepliesPerUser": 4,
+
+    "typingDelay": 3500,
+    "varyTypingSpeed": true,
+    "typingVariation": 0.4,
+
     "historySize": 8,
-    "autoSendEnabled": true,
-    "autoSendChance": 0.4,
-    "autoSendInterval": 900000,
-    "respondToGeneral": 0.35,
-    "respondToMention": 0.8,
     "minReplyWords": 2,
     "maxReplyWords": 20,
     "replyStyle": "smart",
-    "apiKeyRotation": true,
+
+    "autoSendEnabled": true,
+    "autoSendChance": 0.15,
+    "autoSendInterval": 1800000,
+    "quietThreshold": 300,
+
+    "addReactions": true,
+    "reactionChance": 0.15,
+    "maxReactionsPerUser": 3,
+
+    "addTypos": true,
     "personaEnabled": true,
     "queueEnabled": true,
-    "addTypos": true,
-    "varyTypingSpeed": true,
-    "typingVariation": 0.4,
-    "addReactions": true,
-    "reactionChance": 0.2,
-    "maxReactionsPerUser": 5,
-    "quietThreshold": 180,
+    "apiKeyRotation": true,
     "databaseEnabled": true,
     "userProfiles": true,
 
@@ -40,7 +44,7 @@
     "retryCount": 3,
     "timeout": 8000,
     "maxTokens": 40,
-    "temperature": 0.8,
+    "temperature": 0.85,
     "top_p": 0.9
   }
 }
