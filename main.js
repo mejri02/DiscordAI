@@ -85,6 +85,58 @@ class RateLimiter {
     }
 }
 
+// ── SLEEP SCHEDULE ───────────────────────────────────────────────
+// Simulates a real person being offline at night
+function isWithinActiveHours() {
+    if (!botConfig.sleepScheduleEnabled) return true;
+    let hour = new Date().getUTCHours() + (botConfig.sleepTimezoneOffset || 1);
+    if (hour >= 24) hour -= 24;
+    if (hour < 0)   hour += 24;
+    const start = botConfig.sleepStart ?? 1;  // 1am  → go to sleep
+    const end   = botConfig.sleepEnd   ?? 8;  // 8am  → wake up
+    // If hour is in the sleep window, return false (inactive)
+    return !(hour >= start && hour < end);
+}
+
+// ── CHANNEL RESPONSE COOLDOWN WITH JITTER ───────────────────────
+let channelLastResponseTime = {};
+
+function channelOnCooldown(channelId) {
+    const last = channelLastResponseTime[channelId] || 0;
+    const base  = (botConfig.channelCooldownMinutes || 2) * 60 * 1000;
+    const jitter = base * (0.7 + Math.random() * 0.6); // ±30% variance
+    return (Date.now() - last) < jitter;
+}
+
+function markChannelResponded(channelId) {
+    channelLastResponseTime[channelId] = Date.now();
+}
+
+// ── RANDOM AFK BREAKS ────────────────────────────────────────────
+let afkUntil = 0;
+
+function maybeGoAFK() {
+    if (!botConfig.randomAfkEnabled) return;
+    if (Math.random() < 0.04) { // ~4% chance per message to go AFK
+        const minutes = 30 + Math.floor(Math.random() * 60); // 30–90 min
+        afkUntil = Date.now() + minutes * 60 * 1000;
+        logger.info(`😴 Going AFK for ${minutes} min`);
+    }
+}
+
+function isAFK() {
+    return Date.now() < afkUntil;
+}
+
+// ── DELAYED REACTIONS ────────────────────────────────────────────
+// Real people react minutes later, not immediately
+function scheduleDelayedReaction(message, emoji) {
+    const delayMs = (15 + Math.random() * 105) * 1000; // 15–120 sec
+    setTimeout(async () => {
+        await addReactionToMessage(message, emoji);
+    }, delayMs);
+}
+
 function initDatabase(accountName) {
     const dbName = `conversations_${accountName.replace(/\s+/g, '_')}.db`;
     try {
@@ -831,7 +883,14 @@ function loadBotConfig() {
             disfluenciesEnabled: userConfig.ai?.disfluenciesEnabled || true,
             selfCorrectionEnabled: userConfig.ai?.selfCorrectionEnabled || true,
             topicDetection: userConfig.ai?.topicDetection || true,
-            userProfiles: userConfig.ai?.userProfiles || true
+            userProfiles: userConfig.ai?.userProfiles || true,
+            // Anti-detection: sleep schedule
+            sleepScheduleEnabled: userConfig.ai?.sleepScheduleEnabled ?? true,
+            sleepStart: userConfig.ai?.sleepStart ?? 1,          // 1am sleep
+            sleepEnd: userConfig.ai?.sleepEnd ?? 8,              // 8am wake
+            sleepTimezoneOffset: userConfig.ai?.sleepTimezoneOffset ?? 1, // UTC+1
+            // Anti-detection: random AFK breaks
+            randomAfkEnabled: userConfig.ai?.randomAfkEnabled ?? true
         };
 
         HUMAN_PROMPT = `you're a normal person in discord chat. lowercase only. ${botConfig.minReplyWords}-${botConfig.maxReplyWords} words max. no punctuation. talk naturally like a real person.`;
@@ -1256,6 +1315,11 @@ async function initializeAccount(account) {
         const chCfg = account.channels.find(c => c.id === message.channel.id);
         if (!chCfg || !chCfg.useAI) return;
 
+        // ── Human-like gate checks ──────────────────────────────
+        if (!isWithinActiveHours()) return;          // sleeping
+        if (isAFK()) return;                         // mid-AFK break
+        maybeGoAFK();                                // maybe start AFK
+
         const dailyTotal = dailyResponseCount[account.name] || 0;
         if (dailyTotal >= botConfig.maxResponsesPerDay) return;
 
@@ -1300,7 +1364,7 @@ async function initializeAccount(account) {
 
         if (shouldReact(message)) {
             const emoji = getReactionEmoji(message);
-            await addReactionToMessage(message, emoji);
+            scheduleDelayedReaction(message, emoji); // delayed, not instant
         }
 
         const isForBot = isMessageForBot(message, client);
@@ -1309,6 +1373,12 @@ async function initializeAccount(account) {
             if (Math.random() > botConfig.respondToMention) return;
         } else {
             if (Math.random() > botConfig.respondToGeneral) return;
+        }
+
+        // Per-channel cooldown with jitter (prevents spamming one channel)
+        if (channelOnCooldown(channelId)) {
+            logger.info(`⏳ [${channelId}] channel on cooldown, skipping`);
+            return;
         }
 
         if (Math.random() < botConfig.skipRate) {
@@ -1369,6 +1439,7 @@ async function initializeAccount(account) {
                         logger.info(`📤 [${displayName}] @${username}: "${reply.substring(0, 30)}..."`);
                         
                         dailyResponseCount[account.name] = (dailyResponseCount[account.name] || 0) + 1;
+                        markChannelResponded(channelId); // start per-channel cooldown
                         
                         if (botConfig.databaseEnabled) {
                             addToMemory(account.name, message.id, username, message.content, reply, topic);
