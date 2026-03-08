@@ -24,7 +24,6 @@ let lastChannelResponse = {};
 let messageHistory = {};
 let usedApiKeys = new Set();
 let lastGeneratedText = null;
-const cooldownTime = 86400;
 let messageQueue = {};
 let channelPersonas = {};
 let userContextMemory = {};
@@ -38,27 +37,34 @@ let pendingReplies = {};
 let channelCache = new Map();
 let rateLimiters = {};
 let channelLastMessageTime = {};
+let userLastMessageTime = {};
+let userResponseCount = {};
+let conversationThreads = {};
+let userTrustScores = {};
 
 let HUMAN_PROMPT = "";
 
-const bannedWords = ['hi', 'fire', 'hello', 'lit', 'blaze'];
+const bannedWords = ['discord', 'server', 'bot', 'channel', 'message'];
 
 const topics = {
-    gaming: ['game', 'play', 'console', 'pc', 'xbox', 'playstation', 'controller', 'gamer'],
-    music: ['song', 'album', 'artist', 'band', 'concert', 'beats', 'tune'],
-    movies: ['film', 'movie', 'cinema', 'actor', 'director', 'scene', 'plot'],
-    tech: ['code', 'tech', 'software', 'hardware', 'gadget', 'app', 'update'],
-    food: ['food', 'eat', 'cook', 'recipe', 'snack', 'meal', 'yummy'],
-    anime: ['anime', 'manga', 'episode', 'series', 'character', 'aot', 'naruto', 'one piece']
+    gaming: ['game', 'play', 'console', 'pc', 'xbox', 'playstation', 'controller', 'gamer', 'minecraft', 'valorant', 'fortnite', 'cod', 'league', 'lol', 'ranked'],
+    music: ['song', 'album', 'artist', 'band', 'concert', 'beats', 'tune', 'spotify', 'playlist', 'genre', 'rap', 'rock', 'pop', 'vibes'],
+    movies: ['film', 'movie', 'cinema', 'actor', 'director', 'scene', 'plot', 'netflix', 'series', 'show', 'episode', 'watched'],
+    tech: ['code', 'tech', 'software', 'hardware', 'gadget', 'app', 'update', 'phone', 'computer', 'laptop', 'keyboard', 'mouse'],
+    food: ['food', 'eat', 'cook', 'recipe', 'snack', 'meal', 'yummy', 'hungry', 'dinner', 'lunch', 'breakfast', 'coffee', 'tea'],
+    anime: ['anime', 'manga', 'episode', 'series', 'character', 'aot', 'naruto', 'one piece', 'bleach', 'demon slayer', 'jujutsu'],
+    life: ['work', 'school', 'job', 'tired', 'sleep', 'bed', 'morning', 'night', 'day', 'weekend', 'busy', 'free'],
+    sports: ['game', 'team', 'player', 'match', 'win', 'loss', 'score', 'goal', 'basketball', 'football', 'soccer', 'baseball']
 };
 
 const moods = {
-    excited: { emoji: ['!', 'awesome', 'great'], multiplier: 1.2 },
-    chill: { emoji: ['😌', 'cool', 'nice'], multiplier: 1.0 },
-    sarcastic: { emoji: ['🙄', 'oh really', 'sure'], multiplier: 0.9 },
-    joking: { emoji: ['😂', 'lol', 'funny'], multiplier: 1.1 },
-    lazy: { emoji: ['😴', 'whatever', 'maybe'], multiplier: 0.8 },
-    paranoid: { emoji: ['👀', 'you sure', 'hmm'], multiplier: 0.95 }
+    excited: { emoji: ['!', 'awesome', 'great', 'love'], multiplier: 1.2 },
+    chill: { emoji: ['😌', 'cool', 'nice', 'yeah'], multiplier: 1.0 },
+    sarcastic: { emoji: ['🙄', 'oh really', 'sure', 'right'], multiplier: 0.9 },
+    joking: { emoji: ['😂', 'lol', 'funny', 'lmao'], multiplier: 1.1 },
+    lazy: { emoji: ['😴', 'whatever', 'maybe', 'idk'], multiplier: 0.8 },
+    paranoid: { emoji: ['👀', 'you sure', 'hmm', 'sus'], multiplier: 0.95 },
+    thoughtful: { emoji: ['🤔', 'hmm', 'interesting', 'true'], multiplier: 1.05 }
 };
 
 class RateLimiter {
@@ -96,15 +102,43 @@ function initDatabase(accountName) {
             
             db.run(`CREATE TABLE IF NOT EXISTS user_profiles (
                 user_id TEXT PRIMARY KEY,
-                profile_data TEXT,
+                username TEXT,
+                profile_data TEXT DEFAULT '{}',
+                interaction_count INTEGER DEFAULT 1,
                 last_seen INTEGER
             )`);
+            
+            db.run(`ALTER TABLE user_profiles ADD COLUMN username TEXT`, (err) => {
+                if (err && !err.message.includes('duplicate column name')) {
+                    logger.error(`Error adding username column: ${err.message}`);
+                }
+            });
+            
+            db.run(`ALTER TABLE user_profiles ADD COLUMN profile_data TEXT DEFAULT '{}'`, (err) => {
+                if (err && !err.message.includes('duplicate column name')) {
+                    logger.error(`Error adding profile_data column: ${err.message}`);
+                }
+            });
+            
+            db.run(`ALTER TABLE user_profiles ADD COLUMN interaction_count INTEGER DEFAULT 1`, (err) => {
+                if (err && !err.message.includes('duplicate column name')) {
+                    logger.error(`Error adding interaction_count column: ${err.message}`);
+                }
+            });
 
             db.run(`CREATE TABLE IF NOT EXISTS channel_cache (
                 channel_id TEXT PRIMARY KEY,
                 server_name TEXT,
                 channel_name TEXT,
-                last_updated INTEGER
+                last_active INTEGER
+            )`);
+
+            db.run(`CREATE TABLE IF NOT EXISTS conversation_threads (
+                thread_id TEXT PRIMARY KEY,
+                participants TEXT,
+                topic TEXT,
+                message_count INTEGER DEFAULT 1,
+                last_message INTEGER
             )`);
         });
         logger.info(`📊 Database initialized: ${dbName}`);
@@ -126,13 +160,13 @@ function addToMemory(accountId, messageId, author, content, botResponse = null, 
             [messageId || 'none', author, content, botResponse, Date.now(), topic]
         );
         
-        db.run(`DELETE FROM memory WHERE timestamp < ?`, [Date.now() - 86400000]);
+        db.run(`DELETE FROM memory WHERE timestamp < ?`, [Date.now() - 86400000 * 3]);
     } catch (error) {
         logger.error(`Memory add error: ${error.message}`);
     }
 }
 
-function getMemoryContext(accountId, limit = 10) {
+function getMemoryContext(accountId, limit = 8) {
     if (!dbConnections[accountId]) return '';
     
     return new Promise((resolve) => {
@@ -167,37 +201,64 @@ function hasResponded(accountId, messageId) {
 }
 
 function loadUserProfiles(accountId) {
-    if (!dbConnections[accountId]) return {};
+    if (!dbConnections[accountId]) return Promise.resolve({});
     
     return new Promise((resolve) => {
-        dbConnections[accountId].all(
-            `SELECT user_id, profile_data FROM user_profiles`,
-            [],
-            (err, rows) => {
-                if (err || !rows) resolve({});
-                const profiles = {};
-                rows.forEach(row => {
-                    try {
-                        profiles[row.user_id] = JSON.parse(row.profile_data);
-                    } catch {}
-                });
-                userProfiles[accountId] = profiles;
-                resolve(profiles);
-            }
-        );
+        try {
+            dbConnections[accountId].all(
+                `SELECT user_id, username, profile_data, interaction_count FROM user_profiles`,
+                [],
+                (err, rows) => {
+                    if (err) {
+                        logger.error(`Error loading profiles: ${err.message}`);
+                        resolve({});
+                        return;
+                    }
+                    if (!rows || rows.length === 0) {
+                        resolve({});
+                        return;
+                    }
+                    const profiles = {};
+                    rows.forEach(row => {
+                        try {
+                            profiles[row.user_id] = {
+                                ...JSON.parse(row.profile_data || '{}'),
+                                username: row.username || 'unknown',
+                                interactionCount: row.interaction_count || 1
+                            };
+                        } catch (e) {
+                            logger.error(`Error parsing profile for ${row.user_id}: ${e.message}`);
+                        }
+                    });
+                    userProfiles[accountId] = profiles;
+                    resolve(profiles);
+                }
+            );
+        } catch (error) {
+            logger.error(`Load user profiles error: ${error.message}`);
+            resolve({});
+        }
     });
 }
 
-function saveUserProfile(accountId, userId, profile) {
+function saveUserProfile(accountId, userId, username, profile) {
     if (!dbConnections[accountId]) return;
     
     userProfiles[accountId] = userProfiles[accountId] || {};
-    userProfiles[accountId][userId] = { ...(userProfiles[accountId][userId] || {}), ...profile };
+    userProfiles[accountId][userId] = { 
+        ...(userProfiles[accountId][userId] || {}), 
+        ...profile,
+        username,
+        lastSeen: Date.now()
+    };
+    
+    const existing = userProfiles[accountId][userId];
+    const interactionCount = (existing.interactionCount || 0) + 1;
     
     dbConnections[accountId].run(
-        `INSERT OR REPLACE INTO user_profiles (user_id, profile_data, last_seen)
-         VALUES (?, ?, ?)`,
-        [userId, JSON.stringify(userProfiles[accountId][userId]), Date.now()]
+        `INSERT OR REPLACE INTO user_profiles (user_id, username, profile_data, interaction_count, last_seen)
+         VALUES (?, ?, ?, ?, ?)`,
+        [userId, username, JSON.stringify(userProfiles[accountId][userId]), interactionCount, Date.now()]
     );
 }
 
@@ -207,156 +268,235 @@ function getUserProfile(accountId, userId) {
 
 function extractUserPreferences(text) {
     const prefs = {};
-    const gameMatch = text.match(/my favorite game is (\w+)/i);
-    if (gameMatch) prefs.favorite_game = gameMatch[1];
     
-    const foodMatch = text.match(/my favorite food is (\w+)/i);
-    if (foodMatch) prefs.favorite_food = foodMatch[1];
+    const games = ['minecraft', 'valorant', 'fortnite', 'cod', 'league', 'genshin', 'roblox', 'csgo'];
+    for (const game of games) {
+        if (text.toLowerCase().includes(game)) {
+            prefs.favorite_game = game;
+            break;
+        }
+    }
     
-    const animeMatch = text.match(/my favorite anime is (\w+)/i);
-    if (animeMatch) prefs.favorite_anime = animeMatch[1];
+    const music = ['rap', 'rock', 'pop', 'hip hop', 'metal', 'jazz', 'classical', 'edm'];
+    for (const genre of music) {
+        if (text.toLowerCase().includes(genre)) {
+            prefs.music_genre = genre;
+            break;
+        }
+    }
+    
+    const anime = ['naruto', 'one piece', 'aot', 'demon slayer', 'jujutsu', 'bleach'];
+    for (const show of anime) {
+        if (text.toLowerCase().includes(show)) {
+            prefs.favorite_anime = show;
+            break;
+        }
+    }
+    
+    const timeIndicators = ['morning', 'afternoon', 'evening', 'night', 'work', 'school', 'sleep'];
+    for (const time of timeIndicators) {
+        if (text.toLowerCase().includes(time)) {
+            prefs.schedule = time;
+            break;
+        }
+    }
     
     return prefs;
 }
 
 function detectTopic(text) {
     text = text.toLowerCase();
+    const topicScores = {};
+    
     for (const [topic, keywords] of Object.entries(topics)) {
-        if (keywords.some(keyword => text.includes(keyword))) {
-            return topic;
+        let score = 0;
+        for (const keyword of keywords) {
+            if (text.includes(keyword)) {
+                score += 1;
+                if (text.split(' ').includes(keyword)) score += 2;
+            }
         }
+        if (score > 0) topicScores[topic] = score;
     }
-    return 'general';
+    
+    if (Object.keys(topicScores).length === 0) return 'general';
+    
+    return Object.entries(topicScores).sort((a, b) => b[1] - a[1])[0][0];
 }
 
 function analyzeSentiment(text) {
     const result = sentiment.analyze(text);
-    if (result.score > 1) return 'positive';
-    if (result.score < -1) return 'negative';
+    if (result.score > 2) return 'very_positive';
+    if (result.score > 0) return 'positive';
+    if (result.score < -2) return 'very_negative';
+    if (result.score < 0) return 'negative';
     return 'neutral';
 }
 
 function getBotMood(sentiment) {
     const moodMap = {
-        'positive': ['excited', 'chill', 'joking'],
+        'very_positive': ['excited', 'joking', 'chill'],
+        'positive': ['chill', 'joking', 'excited'],
+        'neutral': ['chill', 'thoughtful', 'lazy'],
         'negative': ['sarcastic', 'paranoid', 'lazy'],
-        'neutral': ['chill', 'joking', 'lazy']
+        'very_negative': ['paranoid', 'sarcastic', 'lazy']
     };
     const available = moodMap[sentiment] || ['chill'];
     return available[Math.floor(Math.random() * available.length)];
 }
 
 function sanitizeMessage(message) {
-    let sanitized = message.replace(/[\*\_\~\`\#\'\"\;\:\-\_]+/g, '');
-    sanitized = sanitized.replace(/https?:\/\/[^\s]+/g, '[link]');
-    sanitized = sanitized.toLowerCase();
+    let sanitized = message.toLowerCase();
+    sanitized = sanitized.replace(/https?:\/\/[^\s]+/g, '');
+    sanitized = sanitized.replace(/discord\.gg\/[a-zA-Z0-9]+/g, '');
     
     for (const word of bannedWords) {
         const regex = new RegExp(`\\b${word}\\b`, 'gi');
-        sanitized = sanitized.replace(regex, '***');
+        sanitized = sanitized.replace(regex, '');
     }
-    return sanitized !== message.toLowerCase() ? sanitized : message;
+    
+    sanitized = sanitized.replace(/\s+/g, ' ').trim();
+    return sanitized;
 }
 
-function getResponseType() {
+function getResponseType(userMessageLength) {
     const rand = Math.random();
-    if (rand < 0.2) return { type: 'single_word', maxTokens: 10, instruction: 'one word only' };
-    if (rand < 0.467) return { type: 'long', maxTokens: 100, instruction: '2-4 sentences' };
-    return { type: 'short', maxTokens: 30, instruction: 'one sentence' };
+    
+    if (userMessageLength < 20) {
+        if (rand < 0.3) return { type: 'short', maxWords: 5, instruction: 'brief reply' };
+        return { type: 'medium', maxWords: 10, instruction: 'natural reply' };
+    }
+    
+    if (rand < 0.15) return { type: 'very_short', maxWords: 3, instruction: 'very short' };
+    if (rand < 0.45) return { type: 'short', maxWords: 8, instruction: 'short' };
+    if (rand < 0.75) return { type: 'medium', maxWords: 15, instruction: 'medium' };
+    return { type: 'long', maxWords: 25, instruction: 'detailed' };
 }
 
-function addDisfluencies(text) {
-    if (Math.random() > 0.15) return text;
+function addDisfluencies(text, chance = 0.2) {
+    if (Math.random() > chance) return text;
     
     const disfluencies = {
-        hesitation: ['well', 'um', 'uh', 'like'],
-        backtrack: ['wait', 'i mean', 'actually', 'hold on'],
-        filler: ['you know', 'sort of', 'kind of', 'basically']
+        start: ['well', 'um', 'uh', 'like', 'i mean', 'you know'],
+        middle: ['like', 'you know', 'i guess', 'sort of', 'kind of'],
+        end: ['you know?', 'if that makes sense', 'idk']
     };
     
     const words = text.split(' ');
-    if (words.length < 3) return text;
+    if (words.length < 4) return text;
     
-    const type = Object.keys(disfluencies)[Math.floor(Math.random() * 3)];
-    const disfluency = disfluencies[type][Math.floor(Math.random() * disfluencies[type].length)];
+    const type = Math.random();
     
-    if (type === 'hesitation' && Math.random() > 0.5) {
+    if (type < 0.4) {
+        const disfluency = disfluencies.start[Math.floor(Math.random() * disfluencies.start.length)];
         return `${disfluency} ${text}`;
-    } else if (type === 'backtrack' && words.length > 4) {
-        const insertPos = Math.floor(Math.random() * (words.length - 2)) + 1;
-        words.splice(insertPos, 0, `${disfluency},`);
+    } else if (type < 0.8 && words.length > 5) {
+        const pos = Math.floor(Math.random() * (words.length - 2)) + 1;
+        const disfluency = disfluencies.middle[Math.floor(Math.random() * disfluencies.middle.length)];
+        words.splice(pos, 0, disfluency);
         return words.join(' ');
+    } else {
+        const disfluency = disfluencies.end[Math.floor(Math.random() * disfluencies.end.length)];
+        return `${text} ${disfluency}`;
     }
-    
-    return text;
 }
 
-function addSelfCorrection(text) {
-    if (Math.random() > 0.1) return text;
+function addSelfCorrection(text, chance = 0.08) {
+    if (Math.random() > chance) return text;
     
     const corrections = [
-        'wait no', 'my bad', 'actually', 'hold on',
-        'i meant', 'scratch that', 'never mind'
+        'wait no', 'actually', 'i meant', 'my bad', 
+        'hold on', 'scratch that', 'never mind'
     ];
+    
+    const correction = corrections[Math.floor(Math.random() * corrections.length)];
     
     if (Math.random() > 0.5) {
-        const correction = corrections[Math.floor(Math.random() * corrections.length)];
         return `${correction}, ${text}`;
+    } else {
+        const words = text.split(' ');
+        if (words.length > 3) {
+            const correctWord = words[Math.floor(Math.random() * words.length)];
+            return `${correction} not ${correctWord}, ${text}`;
+        }
+        return `${correction} ${text}`;
+    }
+}
+
+function addTypo(text, chance = 0.12) {
+    if (!botConfig.addTypos || Math.random() > chance) return text;
+    
+    const commonTypos = {
+        'the': 'teh', 'and': 'an', 'you': 'u', 'for': '4',
+        'are': 'r', 'your': 'ur', 'because': 'cuz', 'with': 'w/',
+        'what': 'wat', 'this': 'dis', 'that': 'dat', 'people': 'ppl',
+        'about': 'abt', 'really': 'rly', 'please': 'pls', 'message': 'msg'
+    };
+    
+    const words = text.split(' ');
+    const wordIndex = Math.floor(Math.random() * words.length);
+    const word = words[wordIndex].toLowerCase();
+    
+    if (commonTypos[word]) {
+        words[wordIndex] = commonTypos[word];
+    } else if (word.length > 3 && Math.random() > 0.5) {
+        words[wordIndex] = word.slice(0, -1);
+    } else if (word.length > 3) {
+        const letters = word.split('');
+        const swapIndex = Math.floor(Math.random() * (letters.length - 1));
+        [letters[swapIndex], letters[swapIndex + 1]] = [letters[swapIndex + 1], letters[swapIndex]];
+        words[wordIndex] = letters.join('');
     }
     
-    return text;
+    return words.join(' ');
 }
 
-function addTypo(text) {
-    if (!botConfig.addTypos || Math.random() > botConfig.typoChance) return text;
-    
-    const typoTypes = [
-        () => text.replace(/([aeiou])(?=[^aeiou]*$)/i, '$1' + (Math.random() > 0.5 ? 'e' : 'o')),
-        () => text.replace(/(ing|ed|es|s)$/i, (match) => match.slice(0, -1)),
-        () => text.replace(/(the|and|you|for|with)/gi, (match) => {
-            const typos = {
-                'the': 'teh', 'and': 'adn', 'you': 'yu', 
-                'for': 'fro', 'with': 'wit', 'this': 'thsi',
-                'that': 'taht', 'have': 'hav', 'what': 'wat'
-            };
-            return typos[match.toLowerCase()] || match;
-        }),
-        () => text.split('').map((c, i) => i === Math.floor(Math.random() * text.length) ? c.toUpperCase() : c).join('')
-    ];
-    
-    return typoTypes[Math.floor(Math.random() * typoTypes.length)]();
-}
-
-function getRandomEmojis(count = 1, mood = 'chill') {
-    if (Math.random() > 0.067) return '';
+function getRandomEmojis(count = 1, mood = 'chill', chance = 0.1) {
+    if (Math.random() > chance) return '';
     
     const emojiMap = {
-        'excited': ['🤩', '🥳', '💥', '🎉'],
-        'chill': ['😌', '🍃', '🛋️', '✌️', '😎'],
-        'sarcastic': ['🙄', '😏', '🤷', '😒', '👀'],
-        'joking': ['😂', '🤣', '😜', '😝', '🤡'],
-        'lazy': ['😴', '💤', '🛌', '😪', '🥱'],
-        'paranoid': ['🫣', '🤐', '👀', '😬', '🙈']
+        'excited': ['🤩', '🥳', '💥', '🎉', '🔥', '⚡'],
+        'chill': ['😌', '🍃', '✌️', '😎', '👌', '💯'],
+        'sarcastic': ['🙄', '😏', '🤷', '😒', '👀', '💀'],
+        'joking': ['😂', '🤣', '😜', '😝', '🤡', '👻'],
+        'lazy': ['😴', '💤', '🛌', '😪', '🥱', '😐'],
+        'paranoid': ['🫣', '🤐', '👀', '😬', '🙈', '🤔'],
+        'thoughtful': ['🤔', '🧐', '📝', '💭', '🤨', '❓']
     };
     
     const emojis = emojiMap[mood] || emojiMap['chill'];
-    return Array(count).fill().map(() => emojis[Math.floor(Math.random() * emojis.length)]).join('');
+    const selected = [];
+    for (let i = 0; i < count; i++) {
+        selected.push(emojis[Math.floor(Math.random() * emojis.length)]);
+    }
+    return ' ' + selected.join(' ');
 }
 
-function calculateTypingTime(response) {
+function calculateTypingTime(response, baseDelay = 2.0) {
     const wordCount = response.split(' ').length;
-    return Math.min(5.0, 3.0 + (wordCount / 10.0));
+    
+    if (!botConfig.varyTypingSpeed) {
+        return baseDelay;
+    }
+    
+    let time = 1.5 + (wordCount * 0.15);
+    time *= (0.8 + (Math.random() * 0.4));
+    
+    return Math.min(6.0, Math.max(1.0, time));
 }
 
 function simulateTyping() {
-    if (!botConfig.varyTypingSpeed) return botConfig.typingDelay;
+    const baseDelay = botConfig.typingDelay / 1000;
     
-    const baseDelay = botConfig.typingDelay;
+    if (!botConfig.varyTypingSpeed) {
+        return baseDelay;
+    }
+    
     const variation = botConfig.typingVariation || 0.3;
     const min = baseDelay * (1 - variation);
     const max = baseDelay * (1 + variation);
     
-    return Math.floor(Math.random() * (max - min + 1)) + min;
+    return min + (Math.random() * (max - min));
 }
 
 function shouldReact(message) {
@@ -364,19 +504,26 @@ function shouldReact(message) {
     if (Math.random() > botConfig.reactionChance) return false;
     
     const authorId = message.author.id;
+    const channelId = message.channel.id;
     
     if (!userTypingPatterns[authorId]) {
         userTypingPatterns[authorId] = {
             lastReaction: 0,
-            reactionCount: 0
+            reactionCount: 0,
+            channelReactions: {}
         };
+    }
+    
+    if (!userTypingPatterns[authorId].channelReactions[channelId]) {
+        userTypingPatterns[authorId].channelReactions[channelId] = 0;
     }
     
     const now = Date.now();
     const userData = userTypingPatterns[authorId];
     
-    if (now - userData.lastReaction < 30000) return false;
-    if (userData.reactionCount >= 5) return false;
+    if (now - userData.lastReaction < 60000) return false;
+    if (userData.reactionCount >= botConfig.maxReactionsPerUser) return false;
+    if (userData.channelReactions[channelId] >= 3) return false;
     
     return true;
 }
@@ -384,21 +531,16 @@ function shouldReact(message) {
 function getReactionEmoji(message) {
     const content = message.content.toLowerCase();
     
-    const reactionMap = [
-        { keywords: ['lol', 'haha', 'funny', 'joke'], emoji: '😂' },
-        { keywords: ['?', 'what', 'how', 'why', 'when'], emoji: '❓' },
-        { keywords: ['good', 'great', 'awesome', 'nice', 'cool'], emoji: '👍' },
-        { keywords: ['bad', 'sad', 'unfortunately', 'sorry'], emoji: '😢' },
-        { keywords: ['wow', 'amazing', 'incredible', 'fantastic'], emoji: '😲' }
-    ];
+    if (content.includes('lol') || content.includes('lmao') || content.includes('haha')) return '😂';
+    if (content.includes('?')) return '❓';
+    if (content.includes('good') || content.includes('nice') || content.includes('cool')) return '👍';
+    if (content.includes('sad') || content.includes('rip') || content.includes('damn')) return '😢';
+    if (content.includes('wow') || content.includes('omg') || content.includes('no way')) return '😲';
+    if (content.includes('👀') || content.includes('sus')) return '👀';
+    if (content.includes('fr') || content.includes('facts')) return '💯';
+    if (content.includes('fire') || content.includes('lit')) return '🔥';
     
-    for (const reaction of reactionMap) {
-        if (reaction.keywords.some(keyword => content.includes(keyword))) {
-            return reaction.emoji;
-        }
-    }
-    
-    const randomEmojis = ['👍', '😄', '👀', '💯', '✨', '🚀'];
+    const randomEmojis = ['👍', '😄', '👀', '💯', '🔥', '✅', '👌', '💀'];
     return randomEmojis[Math.floor(Math.random() * randomEmojis.length)];
 }
 
@@ -406,15 +548,19 @@ async function addReactionToMessage(message, emoji) {
     try {
         await message.react(emoji);
         const authorId = message.author.id;
+        const channelId = message.channel.id;
         
         if (!userTypingPatterns[authorId]) {
             userTypingPatterns[authorId] = {
                 lastReaction: Date.now(),
-                reactionCount: 1
+                reactionCount: 1,
+                channelReactions: { [channelId]: 1 }
             };
         } else {
             userTypingPatterns[authorId].lastReaction = Date.now();
             userTypingPatterns[authorId].reactionCount += 1;
+            userTypingPatterns[authorId].channelReactions[channelId] = 
+                (userTypingPatterns[authorId].channelReactions[channelId] || 0) + 1;
         }
         
         logger.info(`👍 Reacted with ${emoji} to ${message.author.username}`);
@@ -426,25 +572,37 @@ async function addReactionToMessage(message, emoji) {
 }
 
 function isLowValueContent(message) {
-    const content = message.content.trim();
+    const content = message.content.trim().toLowerCase();
     
-    const shortGeneric = content.length < 10 && /^(ok|yes|no|maybe|idk|lol|lmao|haha|hey|hi|hello|sup|yo|kk|k)$/i.test(content);
-    if (shortGeneric) return true;
+    const spamPatterns = [
+        /^(ok|yes|no|maybe|idk|lol|lmao|haha|hey|hi|hello|sup|yo|kk|k)$/i,
+        /^(same|fr|real|damn|nice|cool|wtf|omg)$/i,
+        /^[!?.]+$/,
+        /^(lol)+$/i,
+        /^(.)\1{3,}$/
+    ];
+    
+    for (const pattern of spamPatterns) {
+        if (pattern.test(content)) return true;
+    }
+    
+    if (content.length < 2) return true;
     
     return false;
 }
 
-function addToUserMemory(userId, channelId, message) {
+function addToUserMemory(userId, channelId, username, message) {
     if (!userContextMemory[channelId]) userContextMemory[channelId] = {};
     if (!userContextMemory[channelId][userId]) userContextMemory[channelId][userId] = [];
 
     userContextMemory[channelId][userId].push({
+        username,
         content: message,
         timestamp: Date.now()
     });
 
-    if (userContextMemory[channelId][userId].length > 10) {
-        userContextMemory[channelId][userId].shift();
+    if (userContextMemory[channelId][userId].length > 15) {
+        userContextMemory[channelId][userId] = userContextMemory[channelId][userId].slice(-15);
     }
 }
 
@@ -453,8 +611,8 @@ function getUserMemory(userId, channelId) {
         return "";
     }
 
-    const recent = userContextMemory[channelId][userId].slice(-5);
-    return recent.map(m => m.content).join('\n');
+    const recent = userContextMemory[channelId][userId].slice(-8);
+    return recent.map(m => `${m.username}: ${m.content}`).join('\n');
 }
 
 function addToQueue(channelId, processFn) {
@@ -487,7 +645,7 @@ function processQueue(channelId) {
             messageQueue[channelId].shift();
         }
         if (messageQueue[channelId] && messageQueue[channelId].length > 0) {
-            processQueue(channelId);
+            setTimeout(() => processQueue(channelId), 2000 + Math.random() * 3000);
         } else {
             delete messageQueue[channelId];
         }
@@ -495,22 +653,32 @@ function processQueue(channelId) {
 
     setTimeout(() => {
         processFn();
-        setTimeout(executeNext, Math.random() * 3000 + 1000);
-    }, Math.random() * 5000 + 2000);
+        setTimeout(executeNext, 3000 + Math.random() * 4000);
+    }, 2000 + Math.random() * 4000);
 }
 
 function queuePendingReply(channelId, message, targetMessageId) {
     if (!pendingReplies[channelId]) pendingReplies[channelId] = [];
     pendingReplies[channelId].push({ message, targetMessageId, timestamp: Date.now() });
+    
+    if (pendingReplies[channelId].length > 5) {
+        pendingReplies[channelId] = pendingReplies[channelId].slice(-5);
+    }
 }
 
 async function processPendingReplies(channel, accountId) {
     if (!pendingReplies[channel.id] || pendingReplies[channel.id].length === 0) return;
     
+    const now = Date.now();
+    pendingReplies[channel.id] = pendingReplies[channel.id].filter(r => now - r.timestamp < 300000);
+    
+    if (pendingReplies[channel.id].length === 0) return;
+    
     const reply = pendingReplies[channel.id].shift();
-    const typingTime = calculateTypingTime(reply.message);
     
     try { await channel.sendTyping(); } catch {}
+    
+    const typingTime = simulateTyping();
     setTimeout(async () => {
         await sendMessageWithReference(channel, reply.message, reply.targetMessageId, accountId);
     }, typingTime * 1000);
@@ -522,7 +690,7 @@ async function sendMessageWithReference(channel, content, referenceId, accountId
             content: content,
             reply: { messageReference: referenceId }
         });
-        logger.info(`📤 Replied with reference: "${content}"`);
+        logger.info(`📤 Replied with reference: "${content.substring(0, 30)}..."`);
         return message;
     } catch (error) {
         logger.error(`Error sending referenced message: ${error.message}`);
@@ -537,45 +705,57 @@ async function getCachedChannelInfo(channel) {
         return channelCache.get(cacheKey);
     }
     
-    let serverName = 'Direct Message';
-    let channelName = channel.name || 'Unknown Channel';
+    let serverName = 'DM';
+    let channelName = 'dm';
     
     if (channel.guild) {
         serverName = channel.guild.name || 'Unknown Server';
+        channelName = channel.name || 'unknown';
     }
     
     const info = { serverName, channelName };
     channelCache.set(cacheKey, info);
     
-    try {
-        const cacheData = {};
-        if (fs.existsSync('channel_cache.json')) {
-            const existing = fs.readFileSync('channel_cache.json', 'utf8');
-            Object.assign(cacheData, JSON.parse(existing));
-        }
-        cacheData[cacheKey] = info;
-        fs.writeFileSync('channel_cache.json', JSON.stringify(cacheData, null, 2));
-    } catch (error) {
-        logger.error(`Failed to save channel cache: ${error.message}`);
-    }
-    
     return info;
 }
 
 async function shouldStartConversation(channel, accountId) {
-    const quietThreshold = 5 * 60 * 1000;
+    if (!botConfig.autoSendEnabled) return false;
+    
+    const quietThreshold = (botConfig.quietThreshold || 300) * 1000;
     const lastTime = channelLastMessageTime[channel.id] || 0;
     const timeSinceLastMessage = Date.now() - lastTime;
     
-    return timeSinceLastMessage > quietThreshold && Math.random() < 0.2;
+    if (timeSinceLastMessage < quietThreshold) return false;
+    
+    try {
+        const messages = await channel.messages.fetch({ limit: 5 });
+        const botMessages = messages.filter(m => m.author.id === channel.client.user.id).size;
+        
+        if (botMessages >= 2) return false;
+        
+        const lastBotMessage = messages.find(m => m.author.id === channel.client.user.id);
+        if (lastBotMessage && (Date.now() - lastBotMessage.createdTimestamp) < 300000) return false;
+        
+    } catch {}
+    
+    const chance = botConfig.autoSendChance || 0.3;
+    return Math.random() < chance;
 }
 
 async function generateContextualMessage(accountId, channelId, dominantTopic, sentiment, mood) {
-    const memoryContext = await getMemoryContext(accountId);
-    const prompt = `the chat has been quiet, start a conversation about ${dominantTopic} with ${sentiment} sentiment, mood is ${mood}. recent context: ${memoryContext}`;
+    const memoryContext = await getMemoryContext(accountId, 5);
+    const timeOfDay = new Date().getHours();
+    let timeGreeting = '';
     
-    const responseType = getResponseType();
-    const enhancedPrompt = `${HUMAN_PROMPT}\n\nGenerate a casual message to start conversation. ${responseType.instruction}`;
+    if (timeOfDay < 12) timeGreeting = 'morning';
+    else if (timeOfDay < 17) timeGreeting = 'afternoon';
+    else timeGreeting = 'evening';
+    
+    const prompt = `it's ${timeGreeting}, chat has been quiet. start conversation about ${dominantTopic}. vibe is ${mood}. recent: ${memoryContext}`;
+    
+    const responseType = getResponseType(50);
+    const enhancedPrompt = `${HUMAN_PROMPT}\n\n${responseType.instruction}`;
     
     return await generateAI(enhancedPrompt, prompt, channelId, null, 'general', accountId);
 }
@@ -586,7 +766,7 @@ async function makeRequestWithRetry(fn, maxRetries = 3) {
             return await fn();
         } catch (error) {
             if (error.response?.status === 429) {
-                const waitTime = (i + 1) * 2000;
+                const waitTime = (i + 1) * 5000;
                 await new Promise(r => setTimeout(r, waitTime));
                 continue;
             }
@@ -600,32 +780,34 @@ function loadBotConfig() {
     try {
         const configData = fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8');
         const userConfig = JSON.parse(configData);
+        
         botConfig = {
-            maxResponsesPerDay: userConfig.ai?.maxResponsesPerDay || 50,
-            cooldownMinutes: userConfig.ai?.cooldownMinutes || 0.5,
-            channelCooldownMinutes: userConfig.ai?.channelCooldownMinutes || 1,
-            minMessageLength: userConfig.ai?.minMessageLength || 1,
-            skipRate: userConfig.ai?.skipRate || 0.10,
-            responseChance: userConfig.ai?.responseChance || 0.80,
+            maxResponsesPerDay: userConfig.ai?.maxResponsesPerDay || 30,
+            cooldownMinutes: userConfig.ai?.cooldownMinutes || 1,
+            channelCooldownMinutes: userConfig.ai?.channelCooldownMinutes || 2,
+            minMessageLength: userConfig.ai?.minMessageLength || 2,
+            skipRate: userConfig.ai?.skipRate || 0.15,
+            userCooldownMinutes: userConfig.ai?.userCooldownMinutes || 1,
+            responseChance: userConfig.ai?.responseChance || 0.5,
             maxRepliesPerUser: userConfig.ai?.maxRepliesPerUser || 3,
-            typingDelay: userConfig.ai?.typingDelay || 2000,
-            historySize: userConfig.ai?.historySize || 5,
+            typingDelay: userConfig.ai?.typingDelay || 3000,
+            historySize: userConfig.ai?.historySize || 8,
             autoSendEnabled: userConfig.ai?.autoSendEnabled || true,
-            autoSendChance: userConfig.ai?.autoSendChance || 0.50,
+            autoSendChance: userConfig.ai?.autoSendChance || 0.3,
             autoSendInterval: userConfig.ai?.autoSendInterval || 900000,
-            respondToGeneral: userConfig.ai?.respondToGeneral || 0.5,
-            respondToMention: userConfig.ai?.respondToMention || 0.9,
-            respondToOtherMention: userConfig.ai?.respondToOtherMention || 0.05,
-            minReplyWords: userConfig.ai?.minReplyWords || 1,
-            maxReplyWords: userConfig.ai?.maxReplyWords || 10,
+            respondToGeneral: userConfig.ai?.respondToGeneral || 0.3,
+            respondToMention: userConfig.ai?.respondToMention || 0.8,
+            respondToOtherMention: userConfig.ai?.respondToOtherMention || 0.1,
+            minReplyWords: userConfig.ai?.minReplyWords || 2,
+            maxReplyWords: userConfig.ai?.maxReplyWords || 20,
             gmEnabled: userConfig.gm?.enabled || true,
             gmTime: userConfig.gm?.time || "09:00",
             gmTimezone: userConfig.gm?.timezone || "Africa/Tunis",
             gmMessage: userConfig.gm?.message || "gm",
             apiRetryCount: userConfig.api?.retryCount || 3,
-            apiTimeout: userConfig.api?.timeout || 5000,
-            apiMaxTokens: userConfig.api?.maxTokens || 25,
-            apiTemperature: userConfig.api?.temperature || 0.7,
+            apiTimeout: userConfig.api?.timeout || 8000,
+            apiMaxTokens: userConfig.api?.maxTokens || 40,
+            apiTemperature: userConfig.api?.temperature || 0.8,
             apiTopP: userConfig.api?.top_p || 0.9,
             replyStyle: userConfig.ai?.replyStyle || "smart",
             respectSlowMode: userConfig.ai?.respectSlowMode || true,
@@ -635,20 +817,26 @@ function loadBotConfig() {
             qualityFilter: userConfig.ai?.qualityFilter || true,
             personaEnabled: userConfig.ai?.personaEnabled || true,
             queueEnabled: userConfig.ai?.queueEnabled || true,
-            addTypos: userConfig.ai?.addTypos || false,
-            typoChance: userConfig.ai?.typoChance || 0.15,
-            varyTypingSpeed: userConfig.ai?.varyTypingSpeed || false,
-            typingVariation: userConfig.ai?.typingVariation || 0.3,
-            addReactions: userConfig.ai?.addReactions || false,
-            reactionChance: userConfig.ai?.reactionChance || 0.3,
+            addTypos: userConfig.ai?.addTypos || true,
+            typoChance: userConfig.ai?.typoChance || 0.12,
+            varyTypingSpeed: userConfig.ai?.varyTypingSpeed || true,
+            typingVariation: userConfig.ai?.typingVariation || 0.4,
+            addReactions: userConfig.ai?.addReactions || true,
+            reactionChance: userConfig.ai?.reactionChance || 0.2,
             maxReactionsPerUser: userConfig.ai?.maxReactionsPerUser || 5,
-            quietChannelChance: userConfig.ai?.quietChannelChance || 0.2,
-            quietThreshold: userConfig.ai?.quietThreshold || 300
+            quietChannelChance: userConfig.ai?.quietChannelChance || 0.15,
+            quietThreshold: userConfig.ai?.quietThreshold || 180,
+            databaseEnabled: userConfig.ai?.databaseEnabled || true,
+            bannedWordsEnabled: userConfig.ai?.bannedWordsEnabled || true,
+            disfluenciesEnabled: userConfig.ai?.disfluenciesEnabled || true,
+            selfCorrectionEnabled: userConfig.ai?.selfCorrectionEnabled || true,
+            topicDetection: userConfig.ai?.topicDetection || true,
+            userProfiles: userConfig.ai?.userProfiles || true
         };
 
-        HUMAN_PROMPT = `You are a normal human in a Discord server. Lowercase only. ${botConfig.minReplyWords}-${botConfig.maxReplyWords} words max. No punctuation.`;
+        HUMAN_PROMPT = `you're a normal person in discord chat. lowercase only. ${botConfig.minReplyWords}-${botConfig.maxReplyWords} words max. no punctuation. talk naturally like a real person.`;
 
-        logger.info(`Config loaded`);
+        logger.info(`Config loaded - max ${botConfig.maxResponsesPerDay} responses/day`);
     } catch (error) {
         logger.error('Config error: ' + error.message);
         process.exit(1);
@@ -679,16 +867,16 @@ async function loadConfigs() {
 }
 
 function getRandomApiKey() {
-    if (!botConfig.apiKeyRotation) {
-        return aiConfig.models[aiConfig.currentModelIndex];
+    if (!botConfig.apiKeyRotation || aiConfig.models.length === 1) {
+        return aiConfig.models[0];
     }
 
     const availableModels = aiConfig.models.filter(model => !usedApiKeys.has(model.apiKey));
 
     if (availableModels.length === 0) {
-        logger.info("All API keys rate limited. Waiting 24 hours...");
-        usedApiKeys.clear();
-        throw new Error('All API keys rate limited');
+        logger.info("All API keys cooling down. Waiting...");
+        setTimeout(() => usedApiKeys.clear(), 3600000);
+        return aiConfig.models[Math.floor(Math.random() * aiConfig.models.length)];
     }
 
     return availableModels[Math.floor(Math.random() * availableModels.length)];
@@ -699,11 +887,15 @@ function getChannelPersona(channelName) {
 
     const name = channelName.toLowerCase();
 
-    if (name.includes('crypto') || name.includes('trading')) return "crypto";
-    if (name.includes('game') || name.includes('play')) return "gamer";
-    if (name.includes('tech') || name.includes('code')) return "tech";
-    if (name.includes('music')) return "music";
-    if (name.includes('movie')) return "movie";
+    if (name.includes('crypto') || name.includes('trading') || name.includes('finance')) return "crypto";
+    if (name.includes('game') || name.includes('gaming') || name.includes('play')) return "gamer";
+    if (name.includes('tech') || name.includes('code') || name.includes('dev')) return "tech";
+    if (name.includes('music') || name.includes('songs') || name.includes('beats')) return "music";
+    if (name.includes('movie') || name.includes('film') || name.includes('tv')) return "movie";
+    if (name.includes('food') || name.includes('cooking') || name.includes('recipes')) return "food";
+    if (name.includes('anime') || name.includes('manga')) return "anime";
+    if (name.includes('sports') || name.includes('ball')) return "sports";
+    if (name.includes('general') || name.includes('chat') || name.includes('lounge')) return "casual";
 
     return "normal";
 }
@@ -712,11 +904,15 @@ function applyPersonaToPrompt(prompt, persona) {
     if (!botConfig.personaEnabled || persona === "normal") return prompt;
 
     const personaPrompts = {
-        "crypto": "You are a crypto enthusiast. Use crypto slang.",
-        "gamer": "You are a casual gamer. Talk about games.",
-        "tech": "You are interested in technology.",
-        "music": "You love music.",
-        "movie": "You watch movies and shows."
+        "crypto": "you're into crypto and trading. use crypto slang sometimes.",
+        "gamer": "you're a casual gamer. talk about games and gaming.",
+        "tech": "you like tech and coding. keep it simple though.",
+        "music": "you love music. mention songs or artists casually.",
+        "movie": "you watch movies and shows. reference them sometimes.",
+        "food": "you like food and cooking. talk about eating.",
+        "anime": "you watch anime. mention shows casually.",
+        "sports": "you follow sports. talk about games and players.",
+        "casual": "you're just chatting. be normal and chill."
     };
 
     return `${personaPrompts[persona]}\n\n${prompt}`;
@@ -728,35 +924,35 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
     const topic = detectTopic(userPrompt);
     const sentiment = analyzeSentiment(userPrompt);
     const mood = getBotMood(sentiment);
-    const responseType = getResponseType();
+    const responseType = getResponseType(userPrompt.length);
     
     let enhancedPrompt = fullSystemPrompt;
     
-    enhancedPrompt += `\n\nCurrent topic: ${topic}. Stay on topic.`;
-    enhancedPrompt += `\nSentiment: ${sentiment}. Mood: ${mood}. Match this vibe.`;
-    enhancedPrompt += `\nAvoid these words: ${bannedWords.join(', ')}.`;
-    enhancedPrompt += `\nUse natural speech patterns occasionally (like "um", "well", "like").`;
-    enhancedPrompt += `\nSometimes correct yourself naturally (like "wait no", "i mean").`;
-    enhancedPrompt += `\n\nResponse style: ${responseType.instruction}. Keep it casual.`;
+    enhancedPrompt += `\n\ntopic: ${topic}. stay on topic.`;
+    enhancedPrompt += `\nvibe: ${mood}. match this energy.`;
+    enhancedPrompt += `\navoid words: ${bannedWords.join(', ')}.`;
+    enhancedPrompt += `\nbe natural. use filler words sometimes (um, like, well).`;
+    enhancedPrompt += `\nsometimes correct yourself (wait no, i mean).`;
+    enhancedPrompt += `\n\n${responseType.instruction}. be casual. lowercase only.`;
 
     let currentModel;
     let retryCount = 0;
     const currentTemperature = botConfig.apiTemperature;
 
     if (!rateLimiters[accountId]) {
-        rateLimiters[accountId] = new RateLimiter(30, 60000);
+        rateLimiters[accountId] = new RateLimiter(20, 60000);
     }
 
     while (retryCount < botConfig.apiRetryCount) {
         try {
             if (!rateLimiters[accountId].canMakeRequest()) {
-                await new Promise(r => setTimeout(r, 2000));
+                await new Promise(r => setTimeout(r, 3000));
                 continue;
             }
 
             currentModel = getRandomApiKey();
 
-            logger.info(`🔑 [${channelName}] Trying ${currentModel.provider} (${currentModel.name}) [${persona}]`);
+            logger.info(`🔑 [${channelName}] using ${currentModel.provider}`);
 
             let response;
             if (currentModel.provider === 'google') {
@@ -780,7 +976,7 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
 
                 let res = response.data.candidates[0].content.parts[0].text.trim().toLowerCase();
 
-                const forbidden = ["as an ai", "bot", "assistant", "language model"];
+                const forbidden = ["as an ai", "as an assistant", "i'm an ai", "i am an ai", "language model", "bot", "ai language model"];
                 if (forbidden.some(word => res.includes(word))) {
                     usedApiKeys.add(currentModel.apiKey);
                     retryCount++;
@@ -788,24 +984,38 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
                 }
 
                 if (res === lastGeneratedText) {
-                    usedApiKeys.add(currentModel.apiKey);
                     retryCount++;
                     continue;
                 }
 
                 res = sanitizeMessage(res);
-                res = addDisfluencies(res);
-                res = addSelfCorrection(res);
-                res += getRandomEmojis(1, mood);
                 
-                if (botConfig.addTypos) {
-                    res = addTypo(res);
+                if (Math.random() < 0.25) {
+                    res = addDisfluencies(res, 0.3);
+                }
+                
+                if (Math.random() < 0.15) {
+                    res = addSelfCorrection(res, 0.1);
+                }
+                
+                if (Math.random() < 0.2) {
+                    res = addTypo(res, 0.15);
+                }
+                
+                res += getRandomEmojis(1, mood, 0.15);
+
+                const words = res.split(' ').length;
+                if (words < botConfig.minReplyWords || words > botConfig.maxReplyWords) {
+                    retryCount++;
+                    continue;
                 }
 
                 lastGeneratedText = res;
-                logger.info(`🤖 [${channelName}] AI generated: "${res}"`);
+                logger.info(`🤖 [${channelName}] generated: "${res.substring(0, 40)}..."`);
                 
-                addToMemory(accountId, null, 'system', userPrompt, res, topic);
+                if (botConfig.databaseEnabled) {
+                    addToMemory(accountId, null, 'system', userPrompt, res, topic);
+                }
                 
                 return res.replace(/^["']|["']$/g, '').trim();
 
@@ -826,7 +1036,7 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
 
                 let res = response.data.choices[0].message.content.trim().toLowerCase();
 
-                const forbidden = ["as an ai", "bot", "assistant", "language model"];
+                const forbidden = ["as an ai", "as an assistant", "i'm an ai", "i am an ai", "language model", "bot", "ai language model"];
                 if (forbidden.some(word => res.includes(word))) {
                     usedApiKeys.add(currentModel.apiKey);
                     retryCount++;
@@ -834,24 +1044,38 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
                 }
 
                 if (res === lastGeneratedText) {
-                    usedApiKeys.add(currentModel.apiKey);
                     retryCount++;
                     continue;
                 }
 
                 res = sanitizeMessage(res);
-                res = addDisfluencies(res);
-                res = addSelfCorrection(res);
-                res += getRandomEmojis(1, mood);
                 
-                if (botConfig.addTypos) {
-                    res = addTypo(res);
+                if (Math.random() < 0.25) {
+                    res = addDisfluencies(res, 0.3);
+                }
+                
+                if (Math.random() < 0.15) {
+                    res = addSelfCorrection(res, 0.1);
+                }
+                
+                if (Math.random() < 0.2) {
+                    res = addTypo(res, 0.15);
+                }
+                
+                res += getRandomEmojis(1, mood, 0.15);
+
+                const words = res.split(' ').length;
+                if (words < botConfig.minReplyWords || words > botConfig.maxReplyWords) {
+                    retryCount++;
+                    continue;
                 }
 
                 lastGeneratedText = res;
-                logger.info(`🤖 [${channelName}] AI generated: "${res}"`);
+                logger.info(`🤖 [${channelName}] generated: "${res.substring(0, 40)}..."`);
                 
-                addToMemory(accountId, null, 'system', userPrompt, res, topic);
+                if (botConfig.databaseEnabled) {
+                    addToMemory(accountId, null, 'system', userPrompt, res, topic);
+                }
                 
                 return res.replace(/^["']|["']$/g, '').trim();
             }
@@ -859,9 +1083,10 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
         } catch (error) {
             if (error.response?.status === 429) {
                 if (currentModel) usedApiKeys.add(currentModel.apiKey);
+                logger.info(`Rate limited on ${currentModel?.provider}, switching...`);
             }
             retryCount++;
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(resolve => setTimeout(resolve, 3000));
         }
     }
 
@@ -871,16 +1096,16 @@ async function generateAI(systemPrompt, userPrompt, channelName, originalMessage
 async function getChannelInfo(channel) {
     try {
         const fetchedChannel = await channel.fetch();
-        const channelName = fetchedChannel.name || 'Unknown Channel';
-        let serverName = 'Direct Message';
+        const channelName = fetchedChannel.name || 'unknown';
+        let serverName = 'DM';
 
         if (fetchedChannel.guild) {
-            serverName = fetchedChannel.guild.name || 'Unknown Server';
+            serverName = fetchedChannel.guild.name || 'unknown';
         }
 
         return { serverName, channelName };
     } catch (error) {
-        return { serverName: 'Unknown Server', channelName: 'Unknown Channel' };
+        return { serverName: 'unknown', channelName: 'unknown' };
     }
 }
 
@@ -901,7 +1126,7 @@ async function sendMessage(message, reply) {
         }
     } catch (error) {
         if (error.code === 200000) {
-            logger.error(`❌ Message blocked: "${reply}"`);
+            logger.error(`❌ Message blocked: "${reply.substring(0, 20)}..."`);
             return "blocked";
         }
         logger.error(`❌ Error sending message: ${error.message}`);
@@ -913,7 +1138,34 @@ function isMessageForBot(message, client) {
     if (message.mentions.has(client.user.id)) return true;
     if (message.content.toLowerCase().includes(client.user.username.toLowerCase())) return true;
     if (message.channel.type === 'DM') return true;
+    
+    if (message.reference && message.reference.messageId) {
+        return true;
+    }
+    
     return false;
+}
+
+function updateUserTrust(userId, positive) {
+    if (!userTrustScores[userId]) {
+        userTrustScores[userId] = { score: 5, interactions: 0 };
+    }
+    
+    userTrustScores[userId].interactions++;
+    
+    if (positive) {
+        userTrustScores[userId].score = Math.min(10, userTrustScores[userId].score + 1);
+    } else {
+        userTrustScores[userId].score = Math.max(1, userTrustScores[userId].score - 2);
+    }
+}
+
+function shouldRespondToUser(userId) {
+    const trust = userTrustScores[userId];
+    if (!trust) return true;
+    
+    if (trust.score < 3 && trust.interactions > 5) return false;
+    return true;
 }
 
 async function initializeAccount(account) {
@@ -922,8 +1174,10 @@ async function initializeAccount(account) {
     client.once('ready', async () => {
         logger.info(`${account.name} - Logged in`);
 
-        dbConnections[account.name] = initDatabase(account.name);
-        await loadUserProfiles(account.name);
+        if (botConfig.databaseEnabled) {
+            dbConnections[account.name] = initDatabase(account.name);
+            await loadUserProfiles(account.name);
+        }
 
         try {
             if (fs.existsSync('channel_cache.json')) {
@@ -945,30 +1199,52 @@ async function initializeAccount(account) {
                     await processPendingReplies(channel, account.name);
                     
                     if (await shouldStartConversation(channel, account.name)) {
-                        const recentMessages = await channel.messages.fetch({ limit: 5 });
-                        const topics = recentMessages.map(m => detectTopic(m.content));
-                        const sentiments = recentMessages.map(m => analyzeSentiment(m.content));
-                        const dominantTopic = topics.sort((a,b) => 
-                            topics.filter(v => v===a).length - topics.filter(v => v===b).length
-                        ).pop() || 'general';
-                        const dominantSentiment = sentiments.sort((a,b) => 
-                            sentiments.filter(v => v===a).length - sentiments.filter(v => v===b).length
-                        ).pop() || 'neutral';
-                        const mood = getBotMood(dominantSentiment);
-                        
-                        const response = await generateContextualMessage(account.name, channel.id, dominantTopic, dominantSentiment, mood);
-                        if (response) {
-                            try { await channel.sendTyping(); } catch {}
-                            setTimeout(async () => {
-                                await channel.send(response);
-                                logger.info(`📤 Started conversation: "${response}"`);
-                                addToMemory(account.name, null, 'system', 'quiet channel start', response, dominantTopic);
-                            }, calculateTypingTime(response) * 1000);
+                        try {
+                            const recentMessages = await channel.messages.fetch({ limit: 8 });
+                            const nonBotMessages = recentMessages.filter(m => !m.author.bot);
+                            
+                            if (nonBotMessages.size === 0) continue;
+                            
+                            const topics = nonBotMessages.map(m => detectTopic(m.content));
+                            const sentiments = nonBotMessages.map(m => analyzeSentiment(m.content));
+                            
+                            const dominantTopic = topics.sort((a,b) => 
+                                topics.filter(v => v===a).length - topics.filter(v => v===b).length
+                            ).pop() || 'general';
+                            
+                            const dominantSentiment = sentiments.sort((a,b) => 
+                                sentiments.filter(v => v===a).length - sentiments.filter(v => v===b).length
+                            ).pop() || 'neutral';
+                            
+                            const mood = getBotMood(dominantSentiment);
+                            
+                            const dailyTotal = dailyResponseCount[account.name] || 0;
+                            if (dailyTotal >= botConfig.maxResponsesPerDay) continue;
+                            
+                            const response = await generateContextualMessage(account.name, channel.id, dominantTopic, dominantSentiment, mood);
+                            
+                            if (response) {
+                                try { await channel.sendTyping(); } catch {}
+                                
+                                const typingTime = calculateTypingTime(response);
+                                setTimeout(async () => {
+                                    await channel.send(response);
+                                    logger.info(`📤 Started conversation: "${response.substring(0, 30)}..."`);
+                                    
+                                    dailyResponseCount[account.name] = (dailyResponseCount[account.name] || 0) + 1;
+                                    
+                                    if (botConfig.databaseEnabled) {
+                                        addToMemory(account.name, null, 'system', 'quiet channel start', response, dominantTopic);
+                                    }
+                                }, typingTime * 1000);
+                            }
+                        } catch (error) {
+                            logger.error(`Error starting conversation: ${error.message}`);
                         }
                     }
                 }
             }
-        }, 300000);
+        }, botConfig.autoSendInterval || 900000);
     });
 
     client.on('messageCreate', async (message) => {
@@ -980,23 +1256,34 @@ async function initializeAccount(account) {
         const chCfg = account.channels.find(c => c.id === message.channel.id);
         if (!chCfg || !chCfg.useAI) return;
 
+        const dailyTotal = dailyResponseCount[account.name] || 0;
+        if (dailyTotal >= botConfig.maxResponsesPerDay) return;
+
         channelLastMessageTime[message.channel.id] = Date.now();
 
         const channelId = message.channel.id;
+        const userId = message.author.id;
         const now = Date.now();
+
+        if (userLastMessageTime[userId] && (now - userLastMessageTime[userId]) < (botConfig.userCooldownMinutes * 60 * 1000)) {
+            return;
+        }
+        userLastMessageTime[userId] = now;
 
         const channelInfo = await getCachedChannelInfo(message.channel);
         const persona = getChannelPersona(channelInfo.channelName);
         const username = message.author.username;
         const displayName = `${channelInfo.serverName}/${channelInfo.channelName}`;
 
-        const prefs = extractUserPreferences(message.content);
-        if (Object.keys(prefs).length > 0) {
-            saveUserProfile(account.name, message.author.id, prefs);
+        if (botConfig.userProfiles) {
+            const prefs = extractUserPreferences(message.content);
+            if (Object.keys(prefs).length > 0) {
+                saveUserProfile(account.name, userId, username, prefs);
+            }
         }
 
         if (isLowValueContent(message)) {
-            return;
+            if (Math.random() > 0.1) return;
         }
 
         if (!messageHistory[channelId]) messageHistory[channelId] = [];
@@ -1005,11 +1292,11 @@ async function initializeAccount(account) {
             messageHistory[channelId].shift();
         }
 
-        addToUserMemory(message.author.id, channelId, message.content);
-        const userMemory = getUserMemory(message.author.id, channelId);
-        const userProfile = getUserProfile(account.name, message.author.id);
+        if (botConfig.databaseEnabled) {
+            addToUserMemory(userId, channelId, username, message.content);
+        }
 
-        logger.info(`📨 [${displayName}] ${username}: ${message.content.substring(0, 50)}... [${persona}]`);
+        logger.info(`📨 [${displayName}] ${username}: ${message.content.substring(0, 40)}...`);
 
         if (shouldReact(message)) {
             const emoji = getReactionEmoji(message);
@@ -1028,21 +1315,44 @@ async function initializeAccount(account) {
             return;
         }
 
-        const hasResp = await hasResponded(account.name, message.id);
-        if (hasResp) return;
+        if (!shouldRespondToUser(userId)) {
+            logger.info(`Skipping low trust user ${username}`);
+            return;
+        }
+
+        const userResponseCount_key = `${account.name}_${userId}`;
+        userResponseCount[userResponseCount_key] = (userResponseCount[userResponseCount_key] || 0) + 1;
+        if (userResponseCount[userResponseCount_key] > botConfig.maxRepliesPerUser) return;
+
+        if (botConfig.databaseEnabled) {
+            const hasResp = await hasResponded(account.name, message.id);
+            if (hasResp) return;
+        }
 
         addToQueue(channelId, async () => {
             const topic = detectTopic(message.content);
             const sentiment = analyzeSentiment(message.content);
             const mood = getBotMood(sentiment);
-            const memoryContext = await getMemoryContext(account.name);
-            const userContext = Object.entries(userProfile)
-                .map(([k, v]) => `${k}: ${v}`)
-                .join(', ');
+            
+            let memoryContext = '';
+            let userContext = '';
+            
+            if (botConfig.databaseEnabled) {
+                memoryContext = await getMemoryContext(account.name);
+                const userMemory = getUserMemory(userId, channelId);
+                const userProfile = getUserProfile(account.name, userId);
+                
+                userContext = Object.entries(userProfile)
+                    .filter(([k]) => !['username', 'lastSeen', 'interactionCount'].includes(k))
+                    .map(([k, v]) => `${k}: ${v}`)
+                    .join(', ');
+            }
+
+            const history = messageHistory[channelId].slice(-5).join('\n');
 
             const reply = await generateAI(
-                `${HUMAN_PROMPT}\n\nUser preferences: ${userContext}\n\nRecent:\n${messageHistory[channelId].join('\n')}\n\nMemory:\n${memoryContext}`,
-                `Reply to ${username}: "${message.content}" with ${mood} mood and ${sentiment} sentiment`,
+                `${HUMAN_PROMPT}\n\nUser: ${username}\nPreferences: ${userContext || 'none'}\n\nRecent chat:\n${history}`,
+                `reply to ${username}: "${message.content}" - be ${mood}, vibe is ${sentiment}`,
                 displayName,
                 message.content,
                 persona,
@@ -1056,8 +1366,17 @@ async function initializeAccount(account) {
                 setTimeout(async () => {
                     const replyMethod = await sendMessage(message, reply);
                     if (replyMethod !== "blocked") {
-                        logger.info(`📤 [${displayName}] @${username}: "${reply}"`);
-                        addToMemory(account.name, message.id, username, message.content, reply, topic);
+                        logger.info(`📤 [${displayName}] @${username}: "${reply.substring(0, 30)}..."`);
+                        
+                        dailyResponseCount[account.name] = (dailyResponseCount[account.name] || 0) + 1;
+                        
+                        if (botConfig.databaseEnabled) {
+                            addToMemory(account.name, message.id, username, message.content, reply, topic);
+                        }
+                        
+                        updateUserTrust(userId, true);
+                    } else {
+                        updateUserTrust(userId, false);
                     }
                 }, typingTime * 1000);
             }
@@ -1072,10 +1391,10 @@ function resetDailyCounter() {
     usedApiKeys.clear();
     lastGeneratedText = null;
     userContextMemory = {};
-    userTypingPatterns = {};
     userMessageCount = {};
     sentResponses.clear();
     skippedChannels.clear();
+    userResponseCount = {};
     logger.info('Daily counters reset');
 }
 
@@ -1247,7 +1566,7 @@ async function fetchChannelsInteractive() {
 }
 
 async function startBot() {
-    console.log('🤖 Discord AI Bot - Ultra Enhanced Edition\n');
+    console.log('🤖 Discord AI Bot - Human Edition\n');
 
     loadBotConfig();
     const accounts = await loadConfigs();
@@ -1267,14 +1586,17 @@ async function startBot() {
     for (const acc of accounts) {
         console.log(`Logging in ${acc.name}...`);
         await initializeAccount(acc);
-        await new Promise(r => setTimeout(r, 4000));
+        await new Promise(r => setTimeout(r, 5000));
     }
 
-    console.log(`\n✅ Running with ${activeClients.length} accounts\n`);
+    console.log(`\n✅ Running with ${activeClients.length} accounts`);
+    console.log(`📊 Max responses per day: ${botConfig.maxResponsesPerDay}`);
+    console.log(`🤖 Response chance: ${botConfig.responseChance * 100}%`);
+    console.log(`💬 Reply length: ${botConfig.minReplyWords}-${botConfig.maxReplyWords} words\n`);
 }
 
 console.log('══════════════════════════════');
-console.log('🤖 Discord AI Bot - Ultra Enhanced');
+console.log('🤖 Discord AI Bot - Human Edition');
 console.log('══════════════════════════════\n');
 console.log('1. Start bot');
 console.log('2. Fetch channels\n');
